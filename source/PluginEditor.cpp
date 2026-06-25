@@ -53,17 +53,7 @@ mf::LabeledKnob& mf::SectionPanel::addKnob (juce::AudioProcessorValueTreeState& 
 
 static void paintPanel (juce::Graphics& g, juce::Rectangle<float> r, const juce::String& title)
 {
-    g.setColour (LnF::panel);
-    g.fillRoundedRectangle (r, 7.0f);
-    g.setColour (LnF::panelBorder);
-    g.drawRoundedRectangle (r, 7.0f, 1.4f);
-
-    auto titleArea = r.removeFromTop (23.0f);
-    g.setColour (LnF::accent);
-    g.setFont (juce::Font (13.5f, juce::Font::bold));
-    g.drawText (title, titleArea.reduced (10.0f, 0.0f), juce::Justification::centredLeft);
-    g.setColour (LnF::accent.withAlpha (0.30f));
-    g.fillRect (titleArea.getX() + 10.0f, titleArea.getBottom() - 1.0f, r.getWidth() - 20.0f, 1.0f);
+    LnF::drawPanel (g, r, title);
 }
 
 void mf::SectionPanel::paint (juce::Graphics& g)
@@ -121,20 +111,28 @@ void mf::MultibandPanel::paint (juce::Graphics& g)
 {
     paintPanel (g, getLocalBounds().toFloat().reduced (2.0f), "MULTIBAND COMPRESSOR");
 
-    const std::array<juce::String, 3> names { "LOW", "MID", "HIGH" };
+    const std::array<juce::String, 3> names  { "LOW", "MID", "HIGH" };
+    const std::array<juce::Colour, 3> colours { LnF::bandLow, LnF::bandLowMid, LnF::bandHigh };
     const float grValues[3] = { grLo, grMid, grHi };
 
     for (int i = 0; i < 3; ++i)
     {
-        g.setColour (LnF::text);
+        // tinted band column
+        auto col = columnBounds[(size_t) i].toFloat().reduced (3.0f, 2.0f);
+        g.setColour (colours[(size_t) i].withAlpha (0.07f));
+        g.fillRoundedRectangle (col, 5.0f);
+        g.setColour (colours[(size_t) i].withAlpha (0.22f));
+        g.drawRoundedRectangle (col, 5.0f, 1.0f);
+
+        g.setColour (colours[(size_t) i]);
         g.setFont (juce::Font (12.0f, juce::Font::bold));
         g.drawText (names[(size_t) i], labelBounds[(size_t) i], juce::Justification::centred);
 
         auto bar = grBarBounds[(size_t) i].toFloat();
-        g.setColour (LnF::track.darker (0.2f));
+        g.setColour (LnF::background);
         g.fillRoundedRectangle (bar, 2.0f);
         const float n = juce::jlimit (0.0f, 1.0f, grValues[i] / 18.0f);
-        g.setColour (LnF::accent);
+        g.setColour (colours[(size_t) i]);
         g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * n), 2.0f);
     }
 }
@@ -144,7 +142,7 @@ void mf::MultibandPanel::resized()
     auto r = getLocalBounds().reduced (8);
     r.removeFromTop (18);
 
-    auto globalsRow = r.removeFromTop (90);
+    auto globalsRow = r.removeFromTop (84);
     const int gw = globalsRow.getWidth() / globals.size();
     for (int i = 0; i < globals.size(); ++i)
         globals[i]->setBounds ((i == globals.size() - 1 ? globalsRow : globalsRow.removeFromLeft (gw)).reduced (3));
@@ -155,6 +153,7 @@ void mf::MultibandPanel::resized()
     for (int b = 0; b < 3; ++b)
     {
         auto col = (b == 2 ? r : r.removeFromLeft (bw));
+        columnBounds[(size_t) b] = col;
         auto inner = col.reduced (4);
         labelBounds[(size_t) b] = inner.removeFromTop (18);
         grBarBounds[(size_t) b] = inner.removeFromBottom (12).reduced (2, 2);
@@ -204,10 +203,24 @@ void mf::LimiterPanel::resized()
 // ===========================================================================
 //  LevelMeter
 // ===========================================================================
+void mf::LevelMeter::setLevel (float dB)
+{
+    levelDb = dB;
+    if (dB >= peakHoldDb) { peakHoldDb = dB; holdFrames = 0; }
+    else if (++holdFrames > 24) peakHoldDb = juce::jmax (dB, peakHoldDb - 1.2f); // slow fall
+    repaint();
+}
+
 void mf::LevelMeter::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat();
-    g.setColour (LnF::track.darker (0.4f));
+    const auto toY = [&] (float dB)
+    {
+        const float norm = juce::jlimit (0.0f, 1.0f, (dB - minDb) / (maxDb - minDb));
+        return r.getBottom() - r.getHeight() * norm;
+    };
+
+    g.setColour (LnF::background);
     g.fillRoundedRectangle (r, 3.0f);
 
     const float norm = juce::jlimit (0.0f, 1.0f, (levelDb - minDb) / (maxDb - minDb));
@@ -216,10 +229,25 @@ void mf::LevelMeter::paint (juce::Graphics& g)
         auto fill = r.withTop (r.getBottom() - r.getHeight() * norm);
         juce::ColourGradient grad (juce::Colour (0xff43c46b), 0.0f, r.getBottom(),
                                    juce::Colour (0xffe1402f), 0.0f, r.getY(), false);
-        grad.addColour (0.72, juce::Colour (0xffe9bd39));
+        grad.addColour (0.62, juce::Colour (0xffe9bd39));
+        grad.addColour (0.85, juce::Colour (0xffe8772f));
         g.setGradientFill (grad);
         g.fillRoundedRectangle (fill, 3.0f);
     }
+
+    // dB ticks
+    g.setColour (LnF::panelBorder.withAlpha (0.6f));
+    for (float dB : { -6.0f, -12.0f, -24.0f, -48.0f })
+        g.drawHorizontalLine ((int) toY (dB), r.getX(), r.getRight());
+
+    // peak-hold cap
+    if (peakHoldDb > minDb)
+    {
+        g.setColour (LnF::accentHot);
+        const float y = toY (peakHoldDb);
+        g.fillRect (r.getX(), y - 1.0f, r.getWidth(), 2.0f);
+    }
+
     g.setColour (LnF::panelBorder);
     g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
 }
@@ -237,12 +265,13 @@ mf::MeterPanel::MeterPanel()
 
 void mf::MeterPanel::update (float outLDb, float outRDb,
                              float lufsM, float lufsS, float lufsI,
-                             float lo, float mid, float hi, float lim)
+                             float lo, float mid, float hi, float lim, float correlation)
 {
     meterL.setLevel (outLDb);
     meterR.setLevel (outRDb);
     momentary = lufsM; shortTerm = lufsS; integrated = lufsI;
     grLow = lo; grMidB = mid; grHigh = hi; grLim = lim;
+    corr = correlation;
     repaint();
 }
 
@@ -313,6 +342,37 @@ void mf::MeterPanel::paint (juce::Graphics& g)
     drawGr ("MB Md", grMidB);
     drawGr ("MB Hi", grHigh);
     drawGr ("Limit", grLim);
+
+    // --- stereo correlation ---
+    t.removeFromTop (14);
+    g.setColour (LnF::text);
+    g.setFont (juce::Font (11.5f, juce::Font::bold));
+    g.drawText ("CORRELATION", t.removeFromTop (18), juce::Justification::centredLeft);
+
+    auto bar = t.removeFromTop (14).toFloat().reduced (0.0f, 2.0f);
+    g.setColour (LnF::background);
+    g.fillRoundedRectangle (bar, 3.0f);
+
+    const float cx = bar.getX() + (corr * 0.5f + 0.5f) * bar.getWidth();
+    const juce::Colour cc = corr < 0.0f ? juce::Colour (0xffe1402f) : LnF::accent;
+    g.setColour (cc.withAlpha (0.75f));
+    if (corr >= 0.0f) g.fillRect (bar.getCentreX(), bar.getY(), cx - bar.getCentreX(), bar.getHeight());
+    else              g.fillRect (cx, bar.getY(), bar.getCentreX() - cx, bar.getHeight());
+    g.setColour (LnF::panelBorder);
+    g.drawVerticalLine ((int) bar.getCentreX(), bar.getY(), bar.getBottom());
+    g.setColour (LnF::accentHot);
+    g.fillRect (cx - 1.0f, bar.getY() - 1.0f, 2.0f, bar.getHeight() + 2.0f);
+    g.setColour (LnF::panelBorder);
+    g.drawRoundedRectangle (bar, 3.0f, 1.0f);
+
+    auto labels = t.removeFromTop (12);
+    g.setColour (LnF::textDim);
+    g.setFont (9.0f);
+    g.drawText ("-1", labels, juce::Justification::centredLeft);
+    g.drawText ("MONO +1", labels, juce::Justification::centredRight);
+    g.setColour (corr < 0.0f ? juce::Colour (0xffe1402f) : LnF::accentGlow);
+    g.setFont (juce::Font (14.0f, juce::Font::bold));
+    g.drawText (juce::String (corr, 2), t.removeFromTop (20), juce::Justification::centred);
 }
 
 // ===========================================================================
@@ -322,17 +382,32 @@ mf::EQDisplay::EQDisplay (MasterForgeAudioProcessor& proc, juce::AudioProcessorV
     : processor (proc), apvts (state)
 {
     bands = { {
-        { pid::eqLowFreq,  pid::eqLowGain,  nullptr,    20.0f,   500.0f },
-        { pid::eqLmFreq,   pid::eqLmGain,   pid::eqLmQ,  80.0f,  2000.0f },
-        { pid::eqHmFreq,   pid::eqHmGain,   pid::eqHmQ, 800.0f, 12000.0f },
-        { pid::eqHighFreq, pid::eqHighGain, nullptr,  2000.0f, 20000.0f },
+        { pid::eqLowFreq,  pid::eqLowGain,  nullptr,    20.0f,   500.0f, LnF::bandLow,     "LS" },
+        { pid::eqLmFreq,   pid::eqLmGain,   pid::eqLmQ,  80.0f,  2000.0f, LnF::bandLowMid,  "1"  },
+        { pid::eqHmFreq,   pid::eqHmGain,   pid::eqHmQ, 800.0f, 12000.0f, LnF::bandHighMid, "2"  },
+        { pid::eqHighFreq, pid::eqHighGain, nullptr,  2000.0f, 20000.0f, LnF::bandHigh,    "HS" },
     } };
+
+    const char* modeNames[] = { "STEREO", "MID", "SIDE" };
+    for (int i = 0; i < 3; ++i)
+    {
+        auto* btn = new juce::TextButton (modeNames[i]);
+        btn->setClickingTogglesState (false);
+        btn->setConnectedEdges ((i > 0 ? juce::Button::ConnectedOnLeft : 0)
+                                | (i < 2 ? juce::Button::ConnectedOnRight : 0));
+        btn->onClick = [this, i] { setVal (pid::eqMode, (float) i); syncModeButtons(); };
+        addAndMakeVisible (btn);
+        modeButtons.add (btn);
+    }
+
+    freezeButton.setClickingTogglesState (true);
+    freezeButton.onClick = [this] { frozen = freezeButton.getToggleState(); };
+    addAndMakeVisible (freezeButton);
+
+    syncModeButtons();
 }
 
-float mf::EQDisplay::getVal (const char* id) const
-{
-    return apvts.getRawParameterValue (id)->load();
-}
+float mf::EQDisplay::getVal (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
 
 void mf::EQDisplay::setVal (const char* id, float value)
 {
@@ -340,30 +415,40 @@ void mf::EQDisplay::setVal (const char* id, float value)
         p->setValueNotifyingHost (p->convertTo0to1 (value));
 }
 
+void mf::EQDisplay::syncModeButtons()
+{
+    const int mode = (int) getVal (pid::eqMode);
+    for (int i = 0; i < modeButtons.size(); ++i)
+        modeButtons[i]->setToggleState (i == mode, juce::dontSendNotification);
+}
+
+juce::Rectangle<float> mf::EQDisplay::plot() const
+{
+    return getLocalBounds().toFloat().reduced (2.0f).withTrimmedTop (topInset);
+}
+
 float mf::EQDisplay::freqToX (float freq) const
 {
-    auto b = getLocalBounds().toFloat().reduced (2.0f);
-    const float prop = std::log (freq / fMinHz) / std::log (fMaxHz / fMinHz);
-    return b.getX() + prop * b.getWidth();
+    auto b = plot();
+    return b.getX() + std::log (freq / fMinHz) / std::log (fMaxHz / fMinHz) * b.getWidth();
 }
 
 float mf::EQDisplay::xToFreq (float x) const
 {
-    auto b = getLocalBounds().toFloat().reduced (2.0f);
-    const float prop = (x - b.getX()) / b.getWidth();
-    return fMinHz * std::pow (fMaxHz / fMinHz, prop);
+    auto b = plot();
+    return fMinHz * std::pow (fMaxHz / fMinHz, (x - b.getX()) / b.getWidth());
 }
 
 float mf::EQDisplay::gainToY (float gainDb) const
 {
-    auto b = getLocalBounds().toFloat().reduced (2.0f);
-    return b.getCentreY() - (gainDb / maxGainDb) * (b.getHeight() * 0.46f);
+    auto b = plot();
+    return b.getCentreY() - (gainDb / maxGainDb) * (b.getHeight() * 0.44f);
 }
 
 float mf::EQDisplay::yToGain (float y) const
 {
-    auto b = getLocalBounds().toFloat().reduced (2.0f);
-    return (b.getCentreY() - y) / (b.getHeight() * 0.46f) * maxGainDb;
+    auto b = plot();
+    return (b.getCentreY() - y) / (b.getHeight() * 0.44f) * maxGainDb;
 }
 
 juce::Point<float> mf::EQDisplay::handlePos (const Band& band) const
@@ -373,15 +458,20 @@ juce::Point<float> mf::EQDisplay::handlePos (const Band& band) const
 
 int mf::EQDisplay::findHandle (juce::Point<float> p) const
 {
+    int best = -1;
+    float bestDist = 15.0f;
     for (int i = 0; i < (int) bands.size(); ++i)
-        if (handlePos (bands[(size_t) i]).getDistanceFrom (p) < 14.0f)
-            return i;
-    return -1;
+    {
+        const float d = handlePos (bands[(size_t) i]).getDistanceFrom (p);
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return best;
 }
 
 void mf::EQDisplay::refresh()
 {
-    if (processor.getAnalyzer().pullMagnitudes (magnitudes))
+    syncModeButtons();
+    if (! frozen && processor.getAnalyzer().pullMagnitudes (magnitudes))
     {
         if (smoothedDb.size() != magnitudes.size())
             smoothedDb.assign (magnitudes.size(), specMinDb);
@@ -390,61 +480,91 @@ void mf::EQDisplay::refresh()
         {
             const float db = juce::Decibels::gainToDecibels (magnitudes[i], specMinDb);
             if (db > smoothedDb[i]) smoothedDb[i] = db;
-            else                    smoothedDb[i] += (db - smoothedDb[i]) * 0.3f;
+            else                    smoothedDb[i] += (db - smoothedDb[i]) * 0.30f;
         }
     }
     repaint();
 }
 
+void mf::EQDisplay::resized()
+{
+    auto strip = getLocalBounds().reduced (8, 5).removeFromTop (18);
+    auto modeArea = strip.removeFromLeft (174);
+    const int mw = modeArea.getWidth() / 3;
+    for (int i = 0; i < modeButtons.size(); ++i)
+        modeButtons[i]->setBounds (i == 2 ? modeArea : modeArea.removeFromLeft (mw));
+    freezeButton.setBounds (strip.removeFromRight (62));
+}
+
 void mf::EQDisplay::paint (juce::Graphics& g)
 {
-    auto b = getLocalBounds().toFloat().reduced (2.0f);
-    g.setColour (LnF::background.darker (0.3f));
-    g.fillRoundedRectangle (b, 6.0f);
+    auto full = getLocalBounds().toFloat().reduced (2.0f);
+    g.setGradientFill (juce::ColourGradient (LnF::panelLo, full.getCentreX(), full.getY(),
+                                             LnF::background, full.getCentreX(), full.getBottom(), false));
+    g.fillRoundedRectangle (full, 6.0f);
+    g.setColour (LnF::panelBorder);
+    g.drawRoundedRectangle (full, 6.0f, 1.2f);
+
+    auto b = plot();
+    g.reduceClipRegion (b.getSmallestIntegerContainer());
 
     double sr = processor.getCurrentSampleRate();
     if (sr <= 0.0) sr = 48000.0;
 
     // --- grid ---
-    g.setFont (10.0f);
-    const float gridFreqs[] = { 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
-    g.setColour (LnF::panelBorder.withAlpha (0.5f));
-    for (float f : gridFreqs)
+    g.setFont (9.5f);
+    for (float f : { 30.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f, 20000.0f })
+    {
+        g.setColour (LnF::panelBorder.withAlpha (0.35f));
         g.drawVerticalLine ((int) freqToX (f), b.getY(), b.getBottom());
-
+    }
     g.setColour (LnF::textDim);
     for (float f : { 100.0f, 1000.0f, 10000.0f })
         g.drawText (f >= 1000.0f ? juce::String (f / 1000.0f, 0) + "k" : juce::String (f, 0),
-                    (int) freqToX (f) - 18, (int) b.getBottom() - 14, 36, 12, juce::Justification::centred);
-
+                    (int) freqToX (f) - 18, (int) b.getBottom() - 13, 36, 12, juce::Justification::centred);
     for (float dB : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f })
     {
         const float y = gainToY (dB);
-        g.setColour (std::abs (dB) < 0.5f ? LnF::panelBorder : LnF::panelBorder.withAlpha (0.4f));
+        g.setColour (std::abs (dB) < 0.5f ? LnF::panelBorder.brighter (0.1f) : LnF::panelBorder.withAlpha (0.30f));
         g.drawHorizontalLine ((int) y, b.getX(), b.getRight());
+        g.setColour (LnF::textDim.withAlpha (0.7f));
+        if (std::abs (dB) > 0.5f)
+            g.drawText ((dB > 0 ? "+" : "") + juce::String ((int) dB), (int) b.getRight() - 26, (int) y - 6, 24, 12,
+                        juce::Justification::centredRight);
     }
 
-    // --- spectrum ---
+    // --- spectrum (gradient fill + bright top edge) ---
     if (! smoothedDb.empty())
     {
-        juce::Path spec;
-        spec.startNewSubPath (b.getX(), b.getBottom());
         const int bins = (int) smoothedDb.size();
-        for (float x = b.getX(); x <= b.getRight(); x += 1.0f)
+        const auto specY = [&] (float x)
         {
-            const float freq = xToFreq (x);
-            int bin = (int) std::round (freq * (float) (2 * bins) / (float) sr);
+            int bin = (int) std::round (xToFreq (x) * (float) (2 * bins) / (float) sr);
             bin = juce::jlimit (0, bins - 1, bin);
             const float prop = juce::jlimit (0.0f, 1.0f, (smoothedDb[(size_t) bin] - specMinDb) / (specMaxDb - specMinDb));
-            spec.lineTo (x, b.getBottom() - prop * b.getHeight());
+            return b.getBottom() - prop * b.getHeight();
+        };
+
+        juce::Path fill, line;
+        fill.startNewSubPath (b.getX(), b.getBottom());
+        bool first = true;
+        for (float x = b.getX(); x <= b.getRight(); x += 1.0f)
+        {
+            const float y = specY (x);
+            fill.lineTo (x, y);
+            if (first) { line.startNewSubPath (x, y); first = false; } else line.lineTo (x, y);
         }
-        spec.lineTo (b.getRight(), b.getBottom());
-        spec.closeSubPath();
-        g.setColour (kSpectrum.withAlpha (0.35f));
-        g.fillPath (spec);
+        fill.lineTo (b.getRight(), b.getBottom());
+        fill.closeSubPath();
+
+        g.setGradientFill (juce::ColourGradient (kSpectrum.withAlpha (0.55f), b.getCentreX(), b.getY(),
+                                                 kSpectrum.withAlpha (0.04f), b.getCentreX(), b.getBottom(), false));
+        g.fillPath (fill);
+        g.setColour (kSpectrum.brighter (0.2f).withAlpha (0.8f));
+        g.strokePath (line, juce::PathStrokeType (1.2f));
     }
 
-    // --- EQ response curve ---
+    // --- EQ response curve (fill to 0 dB + glow stroke) ---
     using Coefs = juce::dsp::IIR::Coefficients<float>;
     const auto lin = [&] (const char* id) { return juce::Decibels::decibelsToGain (getVal (id)); };
     auto low  = Coefs::makeLowShelf  (sr, getVal (pid::eqLowFreq),  0.707f, lin (pid::eqLowGain));
@@ -452,32 +572,85 @@ void mf::EQDisplay::paint (juce::Graphics& g)
     auto hm   = Coefs::makePeakFilter (sr, getVal (pid::eqHmFreq),  getVal (pid::eqHmQ), lin (pid::eqHmGain));
     auto high = Coefs::makeHighShelf (sr, getVal (pid::eqHighFreq), 0.707f, lin (pid::eqHighGain));
 
-    juce::Path curve;
+    juce::Path curve, curveFill;
+    const float zeroY = gainToY (0.0f);
+    curveFill.startNewSubPath (b.getX(), zeroY);
     bool firstPoint = true;
     for (float x = b.getX(); x <= b.getRight(); x += 1.0f)
     {
         const double f = xToFreq (x);
-        const double mag = low->getMagnitudeForFrequency (f, sr)
-                         * lm->getMagnitudeForFrequency (f, sr)
-                         * hm->getMagnitudeForFrequency (f, sr)
-                         * high->getMagnitudeForFrequency (f, sr);
+        const double mag = low->getMagnitudeForFrequency (f, sr) * lm->getMagnitudeForFrequency (f, sr)
+                         * hm->getMagnitudeForFrequency (f, sr) * high->getMagnitudeForFrequency (f, sr);
         const float y = gainToY (juce::Decibels::gainToDecibels ((float) mag));
-        if (firstPoint) { curve.startNewSubPath (x, y); firstPoint = false; }
-        else            curve.lineTo (x, y);
+        curveFill.lineTo (x, y);
+        if (firstPoint) { curve.startNewSubPath (x, y); firstPoint = false; } else curve.lineTo (x, y);
     }
-    g.setColour (LnF::accent);
-    g.strokePath (curve, juce::PathStrokeType (2.0f));
+    curveFill.lineTo (b.getRight(), zeroY);
+    curveFill.closeSubPath();
+
+    g.setColour (LnF::accent.withAlpha (0.12f));
+    g.fillPath (curveFill);
+    g.setColour (LnF::accentGlow.withAlpha (0.35f));
+    g.strokePath (curve, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved));
+    g.setColour (LnF::accentHot);
+    g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved));
 
     // --- band handles ---
     for (int i = 0; i < (int) bands.size(); ++i)
     {
-        const auto p = handlePos (bands[(size_t) i]);
-        const float rad = (i == draggingBand) ? 8.0f : 6.0f;
-        g.setColour (LnF::accentGlow);
+        const auto& band = bands[(size_t) i];
+        const auto p = handlePos (band);
+        const bool active = (i == draggingBand || i == hoverBand);
+        const float rad = active ? 9.0f : 6.5f;
+
+        g.setColour (band.colour.withAlpha (0.35f));
+        g.fillEllipse (p.x - rad - 3.0f, p.y - rad - 3.0f, (rad + 3.0f) * 2.0f, (rad + 3.0f) * 2.0f);
+        g.setColour (band.colour);
         g.fillEllipse (p.x - rad, p.y - rad, rad * 2.0f, rad * 2.0f);
-        g.setColour (LnF::background);
+        g.setColour (juce::Colours::white.withAlpha (0.9f));
         g.drawEllipse (p.x - rad, p.y - rad, rad * 2.0f, rad * 2.0f, 1.5f);
+        g.setColour (juce::Colours::white);
+        g.setFont (juce::Font (9.0f, juce::Font::bold));
+        g.drawText (band.tag, juce::Rectangle<float> (p.x - rad, p.y - rad, rad * 2.0f, rad * 2.0f),
+                    juce::Justification::centred);
     }
+
+    // --- drag readout ---
+    if (draggingBand >= 0)
+    {
+        const auto& band = bands[(size_t) draggingBand];
+        const auto p = handlePos (band);
+        const float freq = getVal (band.freqId);
+        const float gain = getVal (band.gainId);
+        juce::String txt = (freq >= 1000.0f ? juce::String (freq / 1000.0f, 2) + " kHz"
+                                            : juce::String ((int) std::round (freq)) + " Hz")
+                         + (gain >= 0 ? "  +" : "  ") + juce::String (gain, 1) + " dB";
+        if (band.qId != nullptr)
+            txt += "  Q" + juce::String (getVal (band.qId), 2);
+
+        g.setFont (juce::Font (11.0f, juce::Font::bold));
+        const float w = g.getCurrentFont().getStringWidthFloat (txt) + 16.0f;
+        juce::Rectangle<float> box (p.x - w * 0.5f, p.y - 30.0f, w, 19.0f);
+        box = box.constrainedWithin (b);
+        g.setColour (LnF::background.withAlpha (0.92f));
+        g.fillRoundedRectangle (box, 4.0f);
+        g.setColour (band.colour);
+        g.drawRoundedRectangle (box, 4.0f, 1.0f);
+        g.setColour (LnF::text);
+        g.drawText (txt, box, juce::Justification::centred);
+    }
+}
+
+void mf::EQDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    const int h = findHandle (e.position);
+    if (h != hoverBand) { hoverBand = h; repaint(); }
+    setMouseCursor (h >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void mf::EQDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverBand != -1) { hoverBand = -1; repaint(); }
 }
 
 void mf::EQDisplay::mouseDown (const juce::MouseEvent& e)
@@ -514,6 +687,7 @@ void mf::EQDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::Mouse
 
     const float q = juce::jlimit (0.2f, 8.0f, getVal (band.qId) * (wheel.deltaY > 0.0f ? 1.12f : 0.89f));
     setVal (band.qId, q);
+    repaint();
 }
 
 // ===========================================================================
@@ -657,11 +831,6 @@ MasterForgeAudioProcessorEditor::MasterForgeAudioProcessorEditor (MasterForgeAud
     setLookAndFeel (&lookAndFeel);
     auto& state = processorRef.getAPVTS();
 
-    titleLabel.setText ("MASTER FORGE", juce::dontSendNotification);
-    titleLabel.setFont (juce::Font (24.0f, juce::Font::bold));
-    titleLabel.setColour (juce::Label::textColourId, LnF::accent);
-    addAndMakeVisible (titleLabel);
-
     addAndMakeVisible (bypassButton);
     bypassAttachment = std::make_unique<mf::ButtonAttachment> (state, pid::bypass, bypassButton);
 
@@ -696,7 +865,7 @@ MasterForgeAudioProcessorEditor::MasterForgeAudioProcessorEditor (MasterForgeAud
     meterPanel.onResetIntegrated = [this] { processorRef.resetIntegratedLUFS(); };
     addAndMakeVisible (meterPanel);
 
-    setSize (1180, 840);
+    setSize (1180, 884);
     startTimerHz (30);
 }
 
@@ -706,7 +875,7 @@ MasterForgeAudioProcessorEditor::~MasterForgeAudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
-void MasterForgeAudioProcessorEditor::timerCallback()
+void MasterForgeAudioProcessorEditor::refreshUi()
 {
     meterPanel.update (processorRef.getOutputPeakLDb(),
                        processorRef.getOutputPeakRDb(),
@@ -716,7 +885,8 @@ void MasterForgeAudioProcessorEditor::timerCallback()
                        processorRef.getCompReductionLowDb(),
                        processorRef.getCompReductionMidDb(),
                        processorRef.getCompReductionHiDb(),
-                       processorRef.getLimReductionDb());
+                       processorRef.getLimReductionDb(),
+                       processorRef.getCorrelation());
 
     multiband.setReductions (processorRef.getCompReductionLowDb(),
                              processorRef.getCompReductionMidDb(),
@@ -727,18 +897,43 @@ void MasterForgeAudioProcessorEditor::timerCallback()
 
 void MasterForgeAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (LnF::background);
+    // full-window vertical gradient
+    g.setGradientFill (juce::ColourGradient (LnF::backgroundHi, (float) getWidth() * 0.5f, 0.0f,
+                                             LnF::background, (float) getWidth() * 0.5f, (float) getHeight(), false));
+    g.fillRect (getLocalBounds());
 
-    auto header = getLocalBounds().removeFromTop (52);
-    g.setGradientFill (juce::ColourGradient (LnF::panel, 0.0f, 0.0f,
-                                             LnF::background, 0.0f, 52.0f, false));
-    g.fillRect (header);
+    // soft ember glow behind the title
+    g.setGradientFill (juce::ColourGradient (LnF::accent.withAlpha (0.16f), 150.0f, 0.0f,
+                                             LnF::accent.withAlpha (0.0f), 150.0f, 130.0f, true));
+    g.fillRect (0, 0, getWidth(), 130);
+
+    // header strip
+    g.setGradientFill (juce::ColourGradient (LnF::panelHi.withAlpha (0.9f), 0.0f, 0.0f,
+                                             LnF::background.withAlpha (0.0f), 0.0f, 52.0f, false));
+    g.fillRect (0, 0, getWidth(), 52);
+
+    // ember divider
+    g.setColour (LnF::accent.withAlpha (0.30f));
+    g.fillRect (0, 49, getWidth(), 4);
     g.setColour (LnF::accent);
     g.fillRect (0, 50, getWidth(), 2);
 
+    // ember "spark" logo mark
+    juce::Path diamond;
+    diamond.addQuadrilateral (26.0f, 16.0f, 33.0f, 26.0f, 26.0f, 36.0f, 19.0f, 26.0f);
+    g.setColour (LnF::accentGlow.withAlpha (0.4f));
+    g.fillPath (diamond, juce::AffineTransform::scale (1.5f, 1.5f, 26.0f, 26.0f));
+    g.setColour (LnF::accentHot);
+    g.fillPath (diamond);
+
+    // title with vertical ember gradient
+    g.setGradientFill (juce::ColourGradient (LnF::accentHot, 0.0f, 12.0f, LnF::accent, 0.0f, 40.0f, false));
+    g.setFont (juce::Font (25.0f, juce::Font::bold));
+    g.drawText ("MASTER FORGE", 46, 10, 320, 32, juce::Justification::centredLeft);
+
     g.setColour (LnF::textDim);
-    g.setFont (11.0f);
-    g.drawText ("MASTERING CONSOLE", 232, 19, 240, 16, juce::Justification::centredLeft);
+    g.setFont (juce::Font (10.5f, juce::Font::bold));
+    g.drawText ("MASTERING CONSOLE", 270, 21, 240, 14, juce::Justification::centredLeft);
 }
 
 void MasterForgeAudioProcessorEditor::resized()
@@ -746,8 +941,7 @@ void MasterForgeAudioProcessorEditor::resized()
     auto area = getLocalBounds();
 
     auto header = area.removeFromTop (52);
-    titleLabel.setBounds (header.removeFromLeft (224).withTrimmedLeft (16));
-    bypassButton.setBounds (header.removeFromRight (120).reduced (14, 14));
+    bypassButton.setBounds (header.removeFromRight (124).reduced (16, 13));
 
     presetBar.setBounds (area.removeFromTop (40).reduced (10, 2));
 
@@ -757,11 +951,11 @@ void MasterForgeAudioProcessorEditor::resized()
     meterPanel.setBounds (meterArea);
     area.removeFromRight (10);
 
-    eqDisplay.setBounds (area.removeFromTop (196));
+    eqDisplay.setBounds (area.removeFromTop (200));
     area.removeFromTop (8);
-    eqSection.setBounds (area.removeFromTop (118));
+    eqSection.setBounds (area.removeFromTop (116));
     area.removeFromTop (8);
-    multiband.setBounds (area.removeFromTop (212));
+    multiband.setBounds (area.removeFromTop (248));
     area.removeFromTop (8);
 
     auto bottom = area;

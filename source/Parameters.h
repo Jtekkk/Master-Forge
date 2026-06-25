@@ -15,6 +15,7 @@ namespace mf::pid
     inline constexpr auto outputGain  = "outputGain";
 
     // --- 4-band mastering EQ -----------------------------------------------
+    inline constexpr auto eqMode      = "eqMode";      // 0=Stereo, 1=Mid, 2=Side
     inline constexpr auto eqLowFreq   = "eqLowFreq";   // low shelf
     inline constexpr auto eqLowGain   = "eqLowGain";
     inline constexpr auto eqLmFreq    = "eqLmFreq";    // low-mid bell
@@ -89,6 +90,8 @@ namespace mf
             juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f, db ("dB")));
 
         // ---- EQ ----
+        params.push_back (std::make_unique<juce::AudioParameterChoice> (vid (p::eqMode), "EQ Mode",
+            juce::StringArray { "Stereo", "Mid", "Side" }, 0));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLowFreq), "Low Freq",
             freqRange (20.0f, 500.0f, 120.0f), 100.0f, db ("Hz")));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLowGain), "Low Gain", gainRange(), 0.0f, db ("dB")));

@@ -17,12 +17,12 @@ input gain → 4-band EQ → 3-band multiband comp → saturation → stereo wid
 | Module | What it does |
 | --- | --- |
 | **Input / Output gain** | Trim level into the chain and drive into the limiter (±24 dB). |
-| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the band handles on the graph; mouse-wheel a bell handle to change its Q. |
+| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the colour-coded band handles (with a live freq/gain/Q readout); mouse-wheel a bell handle to change its Q. **Stereo / Mid / Side** processing mode and a **freeze** button for the analyzer. |
 | **3-band multiband compressor** | Linkwitz-Riley crossovers split the signal into low/mid/high bands, each with its own threshold, ratio and makeup (attack/release/knee are shared). Phase-compensated so the bands sum back flat. |
 | **Saturation** | Smooth `tanh` drive with a dry/wet mix for harmonic warmth. |
 | **Stereo width** | Mid/Side width from mono (0%) to wide (200%). |
 | **Brickwall limiter** | 5 ms lookahead, sliding-window peak detection and a ceiling-clamped safety net — the output never exceeds the ceiling. An optional **True Peak** mode limits on a 4× linear-phase oversampled signal to catch inter-sample peaks. Reports latency to the host. |
-| **Metering** | Momentary / short-term / gated-integrated **LUFS** (ITU-R BS.1770), output peak meters and per-band + limiter gain-reduction bars. |
+| **Metering** | Momentary / short-term / gated-integrated **LUFS** (ITU-R BS.1770), output peak meters with peak-hold, per-band + limiter gain-reduction bars and a **stereo correlation** meter. |
 | **Presets** | Built-in factory presets, save/load of user presets to disk, and an **A/B** compare pair with copy-across. |
 
 The output gain sits *before* the limiter so it acts as the limiter drive,
@@ -64,12 +64,14 @@ The built VST3 lands in
 | Option | Default | Effect |
 | --- | --- | --- |
 | `-DMASTERFORGE_BUILD_STANDALONE=ON` | `OFF` | Also build a standalone app for testing without a DAW. |
-| `-DMASTERFORGE_BUILD_TESTS=ON` | `OFF` | Build the no-host DSP + integration test apps. |
+| `-DMASTERFORGE_BUILD_TESTS=ON` | `OFF` | Build the no-host DSP + integration test apps and the UI screenshot tool. |
+| `-DMASTERFORGE_AAX_SDK_PATH=/path/to/aax-sdk` | _(empty)_ | Enable the AAX (Pro Tools) build using the Avid AAX SDK. |
 | `-DJUCE_GIT_TAG=8.0.4` | `7.0.12` | Fetch a different JUCE release. |
 | `-DJUCE_SOURCE_DIR=/path/to/JUCE` | _(empty)_ | Use a local JUCE checkout instead of downloading. |
 
-> AU (macOS) and AAX (Pro Tools) are intentionally not built yet — only VST3.
-> They can be added later by extending `FORMATS` in `CMakeLists.txt`.
+> **VST3** builds everywhere. **AU** is added automatically on macOS. **AAX**
+> (Pro Tools) builds when you point `MASTERFORGE_AAX_SDK_PATH` at the Avid AAX
+> SDK (Avid developer account + signing required for distribution).
 
 ### Tests
 
@@ -103,11 +105,15 @@ source/
 tests/
   dsp_test.cpp              # per-module DSP smoke tests
   integration_test.cpp      # end-to-end processor + editor test
+tools/
+  render_ui.cpp             # offline UI screenshot renderer (no display needed)
 ```
 
 ## Status
 
-Version 0.2.0 — multiband compression, analyzer + draggable EQ curve, true-peak
-limiting and a preset system with A/B compare. Possible next steps: an EQ
-frequency-readout while dragging, spectrum grab/freeze, M/S EQ mode, AU/AAX
-targets and an expanded factory preset library.
+Version 0.3.0 — full "awesome UI" pass on top of the v0.2 feature set:
+forge/ember theme with glowing knobs and a gradient analyzer, draggable EQ
+handles with a live readout, Stereo/Mid/Side EQ mode, analyzer freeze, a stereo
+correlation meter, and AU/AAX build targets alongside VST3. Possible next steps:
+resizable/scalable UI, M/S metering, oversampled saturation and an expanded
+factory preset library.

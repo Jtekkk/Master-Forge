@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MasterForge VERSION 0.2.0 LANGUAGES C CXX)
+project(MasterForge VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,11 +35,27 @@ endif()
 # Plugin target
 # ---------------------------------------------------------------------------
 option(MASTERFORGE_BUILD_STANDALONE "Also build a Standalone app (handy for testing without a DAW)" OFF)
+set(MASTERFORGE_AAX_SDK_PATH "" CACHE PATH "Path to the Avid AAX SDK (enables the AAX build)")
 
 set(MASTERFORGE_FORMATS VST3)
+
+# Audio Unit — only valid on macOS.
+if(APPLE)
+    list(APPEND MASTERFORGE_FORMATS AU)
+endif()
+
+# AAX (Pro Tools) — needs the Avid AAX SDK, supplied by the user.
+if(MASTERFORGE_AAX_SDK_PATH)
+    juce_set_aax_sdk_path("${MASTERFORGE_AAX_SDK_PATH}")
+    list(APPEND MASTERFORGE_FORMATS AAX)
+    message(STATUS "Master Forge: AAX enabled (SDK: ${MASTERFORGE_AAX_SDK_PATH})")
+endif()
+
 if(MASTERFORGE_BUILD_STANDALONE)
     list(APPEND MASTERFORGE_FORMATS Standalone)
 endif()
+
+message(STATUS "Master Forge: building formats: ${MASTERFORGE_FORMATS}")
 
 juce_add_plugin(MasterForge
     COMPANY_NAME            "Forge Audio"
@@ -109,8 +125,28 @@ if(MASTERFORGE_BUILD_TESTS)
         source/gui/ForgeLookAndFeel.cpp)
     target_include_directories(MasterForgeIntegration PRIVATE source)
     target_compile_definitions(MasterForgeIntegration PUBLIC
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0)
     target_link_libraries(MasterForgeIntegration PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+    # Offline UI screenshot tool (renders the editor to a PNG, no host/display).
+    juce_add_console_app(MasterForgeRender PRODUCT_NAME "MasterForgeRender")
+    juce_generate_juce_header(MasterForgeRender)
+    target_sources(MasterForgeRender PRIVATE
+        tools/render_ui.cpp
+        source/PluginProcessor.cpp
+        source/PluginEditor.cpp
+        source/PresetManager.cpp
+        source/gui/ForgeLookAndFeel.cpp)
+    target_include_directories(MasterForgeRender PRIVATE source)
+    target_compile_definitions(MasterForgeRender PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0)
+    target_link_libraries(MasterForgeRender PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags

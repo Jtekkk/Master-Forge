@@ -158,13 +158,24 @@ int main()
         eq.setParameters (100.0f, 6.0f, 500.0f, -4.0f, 1.0f, 3000.0f, 5.0f, 0.8f, 10000.0f, 4.0f);
         juce::AudioBuffer<float> buf (2, block);
         fillSine (buf, 100.0, sr, 0.3, 0);
-        juce::AudioBuffer<float> dry (buf);
-        juce::dsp::AudioBlock<float> blk (buf);
-        juce::dsp::ProcessContextReplacing<float> ctx (blk);
-        for (int i = 0; i < 10; ++i) eq.process (ctx);
+        const float dryPeak = buf.getMagnitude (0, 0, block);
+        for (int i = 0; i < 10; ++i) eq.process (buf, mf::ParametricEQ::stereo);
         check (allFinite (buf), "output is finite");
-        check (std::abs (buf.getMagnitude (0, 0, block) - dry.getMagnitude (0, 0, block)) > 1.0e-4f,
+        check (std::abs (buf.getMagnitude (0, 0, block) - dryPeak) > 1.0e-4f,
                "low-shelf boost changes 100 Hz level");
+
+        // Side-mode EQ must leave a mono (centre) signal untouched (side == 0).
+        eq.reset();
+        juce::AudioBuffer<float> monoBuf (2, block);
+        fillSine (monoBuf, 100.0, sr, 0.3, 0);   // identical L and R => pure mid
+        for (int i = 0; i < 10; ++i) eq.process (monoBuf, mf::ParametricEQ::side);
+        float msDiff = 0.0f;
+        for (int i = 0; i < block; ++i)
+        {
+            const float ref = (float) (0.3 * std::sin (2.0 * kPi * 100.0 * (double) i / sr));
+            msDiff = juce::jmax (msDiff, std::abs (monoBuf.getSample (0, i) - ref));
+        }
+        check (msDiff < 1.0e-3f, "Side-mode EQ leaves a centred signal unchanged");
     }
 
     // ---- Loudness meter: plausible LUFS for a known sine -----------------

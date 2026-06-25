@@ -129,7 +129,7 @@ void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         juce::dsp::ProcessContextReplacing<float> context (block);
 
         inputGain.process (context);
-        eq.process (context);
+        eq.process (buffer, (int) apvts.getRawParameterValue (pid::eqMode)->load());
 
         multiband.process (buffer);
         compLowDb.store (multiband.getReductionLow());
@@ -184,6 +184,27 @@ void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     const float peakR = numCh > 1 ? buffer.getMagnitude (1, 0, numSamples) : peakL;
     outPeakLDb.store (juce::Decibels::gainToDecibels (peakL, -100.0f));
     outPeakRDb.store (juce::Decibels::gainToDecibels (peakR, -100.0f));
+
+    // Stereo correlation (mono-compatibility): +1 mono, 0 wide, -1 out of phase.
+    if (numCh > 1 && numSamples > 0)
+    {
+        const auto* l = buffer.getReadPointer (0);
+        const auto* r = buffer.getReadPointer (1);
+        double sLR = 0.0, sLL = 0.0, sRR = 0.0;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            sLR += (double) l[i] * r[i];
+            sLL += (double) l[i] * l[i];
+            sRR += (double) r[i] * r[i];
+        }
+        const double denom = std::sqrt (sLL * sRR);
+        const float c = denom > 1.0e-9 ? (float) (sLR / denom) : 1.0f;
+        correlation.store (0.85f * correlation.load() + 0.15f * c);
+    }
+    else
+    {
+        correlation.store (1.0f);
+    }
 }
 
 juce::AudioProcessorEditor* MasterForgeAudioProcessor::createEditor()

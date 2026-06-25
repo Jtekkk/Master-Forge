@@ -39,9 +39,40 @@ public:
         *chain.get<highShelf>().state = *Coefs::makeHighShelf (sr, highFreq, 0.707f, g (highGainDb));
     }
 
-    void process (const juce::dsp::ProcessContextReplacing<float>& context)
+    enum Mode { stereo = 0, mid = 1, side = 2 };
+
+    /** Processes in place. In Mid/Side mode the EQ is applied to only the
+        mid (or side) component; in Stereo mode it filters both channels. */
+    void process (juce::AudioBuffer<float>& buffer, int mode)
     {
-        chain.process (context);
+        if (buffer.getNumChannels() < 2 || mode == stereo)
+        {
+            juce::dsp::AudioBlock<float> block (buffer);
+            chain.process (juce::dsp::ProcessContextReplacing<float> (block));
+            return;
+        }
+
+        auto* L = buffer.getWritePointer (0);
+        auto* R = buffer.getWritePointer (1);
+        const int n = buffer.getNumSamples();
+
+        for (int i = 0; i < n; ++i)               // encode L/R -> M/S
+        {
+            const float m = 0.5f * (L[i] + R[i]);
+            const float s = 0.5f * (L[i] - R[i]);
+            L[i] = m; R[i] = s;
+        }
+
+        juce::dsp::AudioBlock<float> block (buffer);
+        auto target = block.getSingleChannelBlock (mode == mid ? 0 : 1);
+        chain.process (juce::dsp::ProcessContextReplacing<float> (target));
+
+        for (int i = 0; i < n; ++i)               // decode M/S -> L/R
+        {
+            const float m = L[i];
+            const float s = R[i];
+            L[i] = m + s; R[i] = m - s;
+        }
     }
 
 private:

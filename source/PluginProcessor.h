@@ -74,6 +74,7 @@ public:
     float getLimReductionDb()     const noexcept { return limReductionDb.load(); }
     float getOutputPeakLDb()      const noexcept { return outPeakLDb.load(); }
     float getOutputPeakRDb()      const noexcept { return outPeakRDb.load(); }
+    float getCorrelation()        const noexcept { return correlation.load(); }
 
 private:
     void updateParameters();
@@ -110,6 +111,7 @@ private:
     std::atomic<float> limReductionDb { 0.0f };
     std::atomic<float> outPeakLDb { -100.0f };
     std::atomic<float> outPeakRDb { -100.0f };
+    std::atomic<float> correlation { 1.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MasterForgeAudioProcessor)
 };
