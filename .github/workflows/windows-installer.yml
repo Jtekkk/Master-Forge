@@ -1,0 +1,65 @@
+name: Windows Installer
+
+# Produces a Windows VST3 and packages it into an Inno Setup installer (.exe).
+# Run it manually from the Actions tab, or push a version tag (e.g. v0.3.0).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version (e.g. 0.3.0)"
+        required: false
+        default: "0.3.0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed only for attaching to a release on tag pushes
+
+jobs:
+  installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure (CMake fetches JUCE)
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DMASTERFORGE_COPY_AFTER_BUILD=OFF
+
+      - name: Build VST3 (Release x64)
+        run: cmake --build build --config Release --target MasterForge_VST3 --parallel
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: cmd
+        run: >
+          iscc /DMyAppVersion=${{ steps.ver.outputs.version }}
+          "/DMyVST3Dir=%GITHUB_WORKSPACE%\build\MasterForge_artefacts\Release\VST3\Master Forge.vst3"
+          packaging\windows\master-forge.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MasterForge-${{ steps.ver.outputs.version }}-Windows-x64
+          path: packaging/windows/Output/*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/windows/Output/*.exe

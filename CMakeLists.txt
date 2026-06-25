@@ -35,6 +35,7 @@ endif()
 # Plugin target
 # ---------------------------------------------------------------------------
 option(MASTERFORGE_BUILD_STANDALONE "Also build a Standalone app (handy for testing without a DAW)" OFF)
+option(MASTERFORGE_COPY_AFTER_BUILD "Copy the built plugin into the system plugin folder after building" ON)
 set(MASTERFORGE_AAX_SDK_PATH "" CACHE PATH "Path to the Avid AAX SDK (enables the AAX build)")
 
 set(MASTERFORGE_FORMATS VST3)
@@ -71,7 +72,7 @@ juce_add_plugin(MasterForge
     NEEDS_MIDI_OUTPUT       FALSE
     IS_MIDI_EFFECT          FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE)
+    COPY_PLUGIN_AFTER_BUILD ${MASTERFORGE_COPY_AFTER_BUILD})
 
 juce_generate_juce_header(MasterForge)
 

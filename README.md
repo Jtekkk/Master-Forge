@@ -82,6 +82,14 @@ cmake --build build -j
 ./build/MasterForgeIntegration_artefacts/Release/MasterForgeIntegration  # full processor + editor
 ```
 
+### Windows installer
+
+A signed-or-unsigned `.exe` installer (Inno Setup) drops the VST3 into the
+shared system VST3 folder. The simplest way is the **Windows Installer** GitHub
+Actions workflow — run it from the Actions tab (or push a `v*` tag) and download
+the installer artifact, no Windows machine required. To build it locally on
+Windows, see [`packaging/windows/README.md`](packaging/windows/README.md).
+
 ## Project layout
 
 ```
