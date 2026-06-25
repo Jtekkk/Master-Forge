@@ -58,6 +58,14 @@ endif()
 
 message(STATUS "Master Forge: building formats: ${MASTERFORGE_FORMATS}")
 
+# When cross-compiling (e.g. MinGW from Linux) the VST3 manifest helper is built
+# for the target and can't run on the build host, so skip the optional
+# moduleinfo.json generation in that case.
+set(MASTERFORGE_VST3_MANIFEST TRUE)
+if(CMAKE_CROSSCOMPILING)
+    set(MASTERFORGE_VST3_MANIFEST FALSE)
+endif()
+
 juce_add_plugin(MasterForge
     COMPANY_NAME            "Forge Audio"
     BUNDLE_ID               com.forgeaudio.masterforge
@@ -72,6 +80,7 @@ juce_add_plugin(MasterForge
     NEEDS_MIDI_OUTPUT       FALSE
     IS_MIDI_EFFECT          FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    VST3_AUTO_MANIFEST ${MASTERFORGE_VST3_MANIFEST}
     COPY_PLUGIN_AFTER_BUILD ${MASTERFORGE_COPY_AFTER_BUILD})
 
 juce_generate_juce_header(MasterForge)

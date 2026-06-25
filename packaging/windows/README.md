@@ -15,6 +15,25 @@ runner — no Windows machine needed.
   download the `MasterForge-<version>-Windows-x64` artifact, **or**
 - push a tag like `v0.3.0`; the installer is built and attached to the release.
 
+## Build it on Linux (no Windows machine)
+
+The plugin can be cross-compiled for Windows with MinGW-w64 and packaged with
+**NSIS** (which, unlike Inno Setup, runs on Linux). This produces a real,
+self-contained installer `.exe` — handy when you don't have a Windows box.
+
+```bash
+sudo apt-get install g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64 nsis cmake ninja-build
+packaging/windows/build-installer-linux.sh 0.3.0
+```
+
+This configures with [`mingw-w64-x86_64.toolchain.cmake`](mingw-w64-x86_64.toolchain.cmake)
+(static runtime, so no MinGW DLLs are needed), builds the VST3, and runs
+`makensis` on [`master-forge.nsi`](master-forge.nsi) to produce
+`MasterForge-<version>-Windows-x64-setup.exe` in the repo root.
+
+> This is a **MinGW** build for convenience. It loads in the vast majority of
+> Windows hosts, but the *official* build is the MSVC one from CI below.
+
 ## Build it locally on Windows
 
 Prerequisites: **Visual Studio 2022** (Desktop C++), **CMake ≥ 3.22**, and
