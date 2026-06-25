@@ -5,10 +5,12 @@
 
 #include "dsp/Limiter.h"
 #include "dsp/Compressor.h"
+#include "dsp/MultibandCompressor.h"
 #include "dsp/Saturation.h"
 #include "dsp/StereoWidth.h"
 #include "dsp/ParametricEQ.h"
 #include "dsp/LoudnessMeter.h"
+#include "dsp/SpectrumAnalyzer.h"
 
 #include <iostream>
 #include <string>
@@ -184,6 +186,130 @@ int main()
                "momentary LUFS is plausible (" + juce::String (m, 2).toStdString() + ")");
         check (std::isfinite (in) && in > -30.0f && in < 0.0f,
                "integrated LUFS is plausible (" + juce::String (in, 2).toStdString() + ")");
+    }
+
+    // ---- Multiband compressor: reconstruction + band isolation ----------
+    std::cout << "[MultibandCompressor]\n";
+    {
+        mf::MultibandCompressor mb;
+        mb.prepare (spec);
+        // No compression anywhere (ratio 1) -> bands should sum back flat.
+        mb.setParameters (200.0f, 2500.0f, 10.0f, 150.0f, 6.0f,
+                          0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f);
+        float outPeak = 0.0f; bool finite = true;
+        long long n = 0;
+        for (int blk = 0; blk < 60; ++blk)
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            fillSine (buf, 1000.0, sr, 0.5, n);
+            n += block;
+            mb.process (buf);
+            finite = finite && allFinite (buf);
+            if (blk > 5) outPeak = juce::jmax (outPeak, buf.getMagnitude (0, 0, block));
+        }
+        check (finite, "output is finite");
+        check (std::abs (outPeak - 0.5f) < 0.06f,
+               "bands reconstruct flat (1 kHz peak " + juce::String (outPeak, 3).toStdString() + " ~= 0.5)");
+
+        // Loud low-frequency tone should only compress the low band.
+        mb.reset();
+        mb.setParameters (200.0f, 2500.0f, 5.0f, 120.0f, 2.0f,
+                          -30.0f, 6.0f, 0.0f, -30.0f, 6.0f, 0.0f, -30.0f, 6.0f, 0.0f);
+        long long m = 0;
+        for (int blk = 0; blk < 120; ++blk)
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            fillSine (buf, 50.0, sr, 0.5, m);
+            m += block;
+            mb.process (buf);
+        }
+        check (mb.getReductionLow() > 1.0f,
+               "low band compresses 50 Hz tone (" + juce::String (mb.getReductionLow(), 2).toStdString() + " dB)");
+        check (mb.getReductionMid() < 0.5f && mb.getReductionHigh() < 0.5f,
+               "mid/high bands stay idle on a low tone");
+    }
+
+    // ---- Spectrum analyzer: peak bin matches the input tone --------------
+    std::cout << "[SpectrumAnalyzer]\n";
+    {
+        mf::SpectrumAnalyzer an;
+        an.prepare (sr);
+        long long n = 0;
+        for (int blk = 0; blk < 12; ++blk)  // > fftSize samples
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            fillSine (buf, 1000.0, sr, 0.5, n);
+            n += block;
+            an.pushBuffer (buf);
+        }
+        std::vector<float> mags;
+        const bool got = an.pullMagnitudes (mags);
+        check (got && ! mags.empty(), "produces FFT magnitudes");
+        if (got)
+        {
+            int peakBin = 0;
+            for (int i = 1; i < (int) mags.size(); ++i)
+                if (mags[(size_t) i] > mags[(size_t) peakBin]) peakBin = i;
+            const double peakFreq = peakBin * sr / mf::SpectrumAnalyzer::fftSize;
+            check (std::abs (peakFreq - 1000.0) < 50.0,
+                   "peak bin at " + juce::String (peakFreq, 1).toStdString() + " Hz tracks the 1 kHz tone");
+        }
+    }
+
+    // ---- True-peak limiter chain (oversample -> limit -> downsample) -----
+    std::cout << "[TruePeak limiter chain]\n";
+    {
+        using OS = juce::dsp::Oversampling<float>;
+        OS os (2, 2, OS::filterHalfBandFIREquiripple, true, true);
+        os.initProcessing ((size_t) block);
+        os.reset();
+        const int osFactor = (int) os.getOversamplingFactor();
+
+        mf::Limiter limOS;
+        juce::dsp::ProcessSpec osSpec { sr * osFactor, (juce::uint32) (block * osFactor), 2 };
+        limOS.prepare (osSpec);
+        const float ceilDb = -1.0f;
+        limOS.setParameters (ceilDb, 100.0f);
+        const float ceilLin = juce::Decibels::decibelsToGain (ceilDb);
+
+        OS osMeas (2, 2, OS::filterHalfBandFIREquiripple, true, true);  // estimates output true peak
+        osMeas.initProcessing ((size_t) block);
+        osMeas.reset();
+
+        float maxTruePeak = 0.0f;
+        bool finite = true;
+        long long n = 0;
+        for (int blk = 0; blk < 300; ++blk)
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            fillSine (buf, 11000.0, sr, 1.4, n);   // hot, inter-sample-peak prone
+            n += block;
+
+            juce::dsp::AudioBlock<float> base (buf);
+            auto up = os.processSamplesUp (base);
+            const int oc = (int) up.getNumChannels();
+            const int on = (int) up.getNumSamples();
+            float* ptrs[8] = {};
+            for (int c = 0; c < oc && c < 8; ++c) ptrs[c] = up.getChannelPointer ((size_t) c);
+            juce::AudioBuffer<float> osBuf (ptrs, oc, on);
+            limOS.process (osBuf);
+            os.processSamplesDown (base);
+            finite = finite && allFinite (buf);
+
+            if (blk > 30)   // after the chains settle
+            {
+                juce::dsp::AudioBlock<float> mb (buf);
+                auto upm = osMeas.processSamplesUp (mb);
+                for (int c = 0; c < (int) upm.getNumChannels(); ++c)
+                    for (int i = 0; i < (int) upm.getNumSamples(); ++i)
+                        maxTruePeak = juce::jmax (maxTruePeak, std::abs (upm.getChannelPointer ((size_t) c)[i]));
+                osMeas.processSamplesDown (mb);
+            }
+        }
+        check (finite, "output is finite");
+        check (maxTruePeak <= ceilLin * 1.30f,
+               "estimated true peak " + juce::String (juce::Decibels::gainToDecibels (maxTruePeak), 2).toStdString()
+                   + " dB controlled near ceiling " + std::to_string (ceilDb) + " dB");
     }
 
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : std::to_string (failures) + " CHECK(S) FAILED") << "\n";

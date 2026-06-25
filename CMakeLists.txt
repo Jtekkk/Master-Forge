@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MasterForge VERSION 0.1.0 LANGUAGES C CXX)
+project(MasterForge VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -62,6 +62,7 @@ juce_generate_juce_header(MasterForge)
 target_sources(MasterForge PRIVATE
     source/PluginProcessor.cpp
     source/PluginEditor.cpp
+    source/PresetManager.cpp
     source/gui/ForgeLookAndFeel.cpp)
 
 target_compile_definitions(MasterForge PUBLIC
@@ -93,6 +94,25 @@ if(MASTERFORGE_BUILD_TESTS)
     target_link_libraries(MasterForgeTests PRIVATE
         juce::juce_dsp
         juce::juce_audio_basics
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+    # End-to-end test: instantiate the processor + editor and run audio through
+    # the whole chain (multiband, true-peak limiter, presets) without a host.
+    juce_add_console_app(MasterForgeIntegration PRODUCT_NAME "MasterForgeIntegration")
+    juce_generate_juce_header(MasterForgeIntegration)
+    target_sources(MasterForgeIntegration PRIVATE
+        tests/integration_test.cpp
+        source/PluginProcessor.cpp
+        source/PluginEditor.cpp
+        source/PresetManager.cpp
+        source/gui/ForgeLookAndFeel.cpp)
+    target_include_directories(MasterForgeIntegration PRIVATE source)
+    target_compile_definitions(MasterForgeIntegration PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(MasterForgeIntegration PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 endif()

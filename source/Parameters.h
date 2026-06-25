@@ -26,13 +26,21 @@ namespace mf::pid
     inline constexpr auto eqHighFreq  = "eqHighFreq";  // high shelf
     inline constexpr auto eqHighGain  = "eqHighGain";
 
-    // --- compressor ---------------------------------------------------------
-    inline constexpr auto compThresh  = "compThresh";
-    inline constexpr auto compRatio   = "compRatio";
-    inline constexpr auto compAttack  = "compAttack";
-    inline constexpr auto compRelease = "compRelease";
-    inline constexpr auto compKnee    = "compKnee";
-    inline constexpr auto compMakeup  = "compMakeup";
+    // --- multiband compressor ----------------------------------------------
+    inline constexpr auto mbXLow      = "mbXLow";      // low/mid crossover
+    inline constexpr auto mbXHigh     = "mbXHigh";     // mid/high crossover
+    inline constexpr auto compAttack  = "compAttack";  // shared
+    inline constexpr auto compRelease = "compRelease"; // shared
+    inline constexpr auto compKnee    = "compKnee";    // shared
+    inline constexpr auto mbLowThresh = "mbLowThresh";
+    inline constexpr auto mbLowRatio  = "mbLowRatio";
+    inline constexpr auto mbLowMakeup = "mbLowMakeup";
+    inline constexpr auto mbMidThresh = "mbMidThresh";
+    inline constexpr auto mbMidRatio  = "mbMidRatio";
+    inline constexpr auto mbMidMakeup = "mbMidMakeup";
+    inline constexpr auto mbHiThresh  = "mbHiThresh";
+    inline constexpr auto mbHiRatio   = "mbHiRatio";
+    inline constexpr auto mbHiMakeup  = "mbHiMakeup";
 
     // --- saturation ---------------------------------------------------------
     inline constexpr auto satDrive    = "satDrive";
@@ -44,6 +52,7 @@ namespace mf::pid
     // --- brickwall limiter --------------------------------------------------
     inline constexpr auto limCeiling  = "limCeiling";
     inline constexpr auto limRelease  = "limRelease";
+    inline constexpr auto limTruePeak = "limTruePeak"; // oversampled ISP limiting
 }
 
 namespace mf
@@ -67,6 +76,10 @@ namespace mf
 
         const auto db   = [] (const juce::String& s) { return Attr().withLabel (s); };
         const auto vid  = [] (const char* id) { return juce::ParameterID { id, 1 }; };
+        const auto gainRange = [] { return juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f); };
+        const auto threshRange = [] { return juce::NormalisableRange<float> (-48.0f, 0.0f, 0.1f); };
+        const auto ratioRange  = [] { return juce::NormalisableRange<float> (1.0f, 20.0f, 0.1f, 0.5f); };
+        const auto makeupRange = [] { return juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f); };
 
         // ---- global ----
         params.push_back (std::make_unique<BoolParam>  (vid (p::bypass), "Bypass", false));
@@ -78,41 +91,46 @@ namespace mf
         // ---- EQ ----
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLowFreq), "Low Freq",
             freqRange (20.0f, 500.0f, 120.0f), 100.0f, db ("Hz")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::eqLowGain), "Low Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f), 0.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::eqLowGain), "Low Gain", gainRange(), 0.0f, db ("dB")));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLmFreq), "L-Mid Freq",
             freqRange (80.0f, 2000.0f, 500.0f), 400.0f, db ("Hz")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::eqLmGain), "L-Mid Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f), 0.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::eqLmGain), "L-Mid Gain", gainRange(), 0.0f, db ("dB")));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLmQ), "L-Mid Q",
             juce::NormalisableRange<float> (0.2f, 8.0f, 0.01f, 0.4f), 0.7f));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::eqHmFreq), "H-Mid Freq",
             freqRange (800.0f, 12000.0f, 3000.0f), 3000.0f, db ("Hz")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::eqHmGain), "H-Mid Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f), 0.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::eqHmGain), "H-Mid Gain", gainRange(), 0.0f, db ("dB")));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqHmQ), "H-Mid Q",
             juce::NormalisableRange<float> (0.2f, 8.0f, 0.01f, 0.4f), 0.7f));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::eqHighFreq), "High Freq",
             freqRange (2000.0f, 20000.0f, 8000.0f), 10000.0f, db ("Hz")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::eqHighGain), "High Gain",
-            juce::NormalisableRange<float> (-15.0f, 15.0f, 0.1f), 0.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::eqHighGain), "High Gain", gainRange(), 0.0f, db ("dB")));
 
-        // ---- compressor ----
-        params.push_back (std::make_unique<FloatParam> (vid (p::compThresh), "Threshold",
-            juce::NormalisableRange<float> (-48.0f, 0.0f, 0.1f), -18.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::compRatio), "Ratio",
-            juce::NormalisableRange<float> (1.0f, 20.0f, 0.1f, 0.5f), 2.0f, Attr().withLabel (":1")));
+        // ---- multiband compressor ----
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbXLow), "X Low/Mid",
+            freqRange (40.0f, 1000.0f, 250.0f), 200.0f, db ("Hz")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbXHigh), "X Mid/High",
+            freqRange (1000.0f, 12000.0f, 3000.0f), 2500.0f, db ("Hz")));
         params.push_back (std::make_unique<FloatParam> (vid (p::compAttack), "Attack",
             juce::NormalisableRange<float> (0.1f, 100.0f, 0.1f, 0.4f), 10.0f, db ("ms")));
         params.push_back (std::make_unique<FloatParam> (vid (p::compRelease), "Release",
             juce::NormalisableRange<float> (10.0f, 1000.0f, 1.0f, 0.4f), 150.0f, db ("ms")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::compKnee), "Knee",
-            juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f), 6.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::compMakeup), "Makeup",
-            juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f), 0.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::compKnee), "Knee", makeupRange(), 6.0f, db ("dB")));
+
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbLowThresh), "Low Thr",  threshRange(), -18.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbLowRatio),  "Low Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbLowMakeup), "Low Gain",  makeupRange(), 0.0f, db ("dB")));
+
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbMidThresh), "Mid Thr",  threshRange(), -18.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbMidRatio),  "Mid Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbMidMakeup), "Mid Gain",  makeupRange(), 0.0f, db ("dB")));
+
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbHiThresh), "High Thr",  threshRange(), -18.0f, db ("dB")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbHiRatio),  "High Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbHiMakeup), "High Gain",  makeupRange(), 0.0f, db ("dB")));
 
         // ---- saturation ----
         params.push_back (std::make_unique<FloatParam> (vid (p::satDrive), "Drive",
@@ -129,6 +147,7 @@ namespace mf
             juce::NormalisableRange<float> (-12.0f, 0.0f, 0.1f), -0.3f, db ("dB")));
         params.push_back (std::make_unique<FloatParam> (vid (p::limRelease), "Lim Release",
             juce::NormalisableRange<float> (1.0f, 500.0f, 1.0f, 0.4f), 100.0f, db ("ms")));
+        params.push_back (std::make_unique<BoolParam>  (vid (p::limTruePeak), "True Peak", true));
 
         return { params.begin(), params.end() };
     }
