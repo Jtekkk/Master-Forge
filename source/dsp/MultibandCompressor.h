@@ -75,32 +75,40 @@ public:
         const int ch = buffer.getNumChannels();
         const int n  = buffer.getNumSamples();
 
+        // Views over the scratch buffers limited to the *current* block length.
+        // (The scratch buffers are allocated at the maximum block size; processing
+        // their full allocated length on a shorter block would run the filters and
+        // band compressors over stale samples and is block-size dependent.)
+        juce::AudioBuffer<float> low  (lowBuf.getArrayOfWritePointers(),  ch, n);
+        juce::AudioBuffer<float> mid  (midBuf.getArrayOfWritePointers(),  ch, n);
+        juce::AudioBuffer<float> high (highBuf.getArrayOfWritePointers(), ch, n);
+
         for (int c = 0; c < ch; ++c)
         {
-            lowBuf.copyFrom (c, 0, buffer, c, 0, n);
-            highBuf.copyFrom (c, 0, buffer, c, 0, n);
+            low.copyFrom  (c, 0, buffer, c, 0, n);
+            high.copyFrom (c, 0, buffer, c, 0, n);
         }
 
         // Low band = LP(xLow), phase-aligned with the second crossover.
-        applyFilter (lpLow, lowBuf);
-        applyFilter (apLow, lowBuf);
+        applyFilter (lpLow, low);
+        applyFilter (apLow, low);
 
         // Everything above xLow, then split at xHigh into mid and high.
-        applyFilter (hpA, highBuf);
+        applyFilter (hpA, high);
         for (int c = 0; c < ch; ++c)
-            midBuf.copyFrom (c, 0, highBuf, c, 0, n);
-        applyFilter (lpMid, midBuf);    // mid
-        applyFilter (hpHigh, highBuf);  // high
+            mid.copyFrom (c, 0, high, c, 0, n);
+        applyFilter (lpMid, mid);    // mid
+        applyFilter (hpHigh, high);  // high
 
-        grLow  = compLow.process (lowBuf);
-        grMid  = compMid.process (midBuf);
-        grHigh = compHigh.process (highBuf);
+        grLow  = compLow.process (low);
+        grMid  = compMid.process (mid);
+        grHigh = compHigh.process (high);
 
         for (int c = 0; c < ch; ++c)
         {
-            buffer.copyFrom (c, 0, lowBuf, c, 0, n);
-            buffer.addFrom  (c, 0, midBuf, c, 0, n);
-            buffer.addFrom  (c, 0, highBuf, c, 0, n);
+            buffer.copyFrom (c, 0, low,  c, 0, n);
+            buffer.addFrom  (c, 0, mid,  c, 0, n);
+            buffer.addFrom  (c, 0, high, c, 0, n);
         }
     }
 

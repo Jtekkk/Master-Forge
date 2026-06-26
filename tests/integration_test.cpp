@@ -115,6 +115,44 @@ int main()
     check (std::abs (apvts.getRawParameterValue (mf::pid::eqHighGain)->load() - 4.2f) < 0.05f,
            "state round-trips a parameter value");
 
+    // --- block-size independence (regression): the output must not depend on
+    //     the host buffer size. A scratch-buffer length bug here once made the
+    //     multiband run over stale tail samples at any size != the prepared max,
+    //     which sounded like a "buffer issue" at typical DAW buffer sizes. ---
+    std::cout << "[block-size independence]\n";
+    {
+        const int total = 8000;
+        const auto renderAt = [&] (int bs)
+        {
+            MasterForgeAudioProcessor q;
+            q.setPlayConfigDetails (2, 2, sr, bs);
+            q.prepareToPlay (sr, bs);
+            std::vector<float> out; out.reserve ((size_t) total);
+            juce::MidiBuffer m;
+            long long nn = 0; int pos = 0;
+            while (pos < total)
+            {
+                const int b = juce::jmin (bs, total - pos);
+                juce::AudioBuffer<float> buf (2, b);
+                for (int i = 0; i < b; ++i)
+                {
+                    const float s = (float) (0.5 * std::sin (2.0 * kPi * 110.0 * (double) (nn + i) / sr));
+                    buf.setSample (0, i, s); buf.setSample (1, i, s);
+                }
+                nn += b; q.processBlock (buf, m);
+                for (int i = 0; i < b; ++i) out.push_back (buf.getSample (0, i));
+                pos += b;
+            }
+            return out;
+        };
+        auto a = renderAt (512), b64 = renderAt (64), b100 = renderAt (100);
+        float d = 0.0f;
+        for (int i = 2000; i < total; ++i)
+            d = juce::jmax (d, std::abs (a[(size_t) i] - b64[(size_t) i]), std::abs (a[(size_t) i] - b100[(size_t) i]));
+        check (d < 1.0e-4f, "output identical at 512 / 64 / 100-sample buffers (max diff "
+                              + juce::String (d, 6).toStdString() + ")");
+    }
+
     // --- editor constructs/destructs (headless: no native peer) ---
     std::cout << "[editor]\n";
     if (auto* editor = proc.createEditor())
