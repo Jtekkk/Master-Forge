@@ -35,7 +35,12 @@ public:
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    // The whole chain runs internally at 64-bit double. A float host is up/down
+    // converted at the boundary; a double-precision host is processed natively.
+    bool supportsDoublePrecisionProcessing() const override { return true; }
+    void processBlock (juce::AudioBuffer<float>&,  juce::MidiBuffer&) override;
+    void processBlock (juce::AudioBuffer<double>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -77,9 +82,15 @@ public:
     float getCorrelation()        const noexcept { return correlation.load(); }
 
 private:
+    // Internal working precision. The chain processes at 64-bit double regardless
+    // of the host's precision (the "internal double precision" quality feature).
+    using Real = double;
+
     void updateParameters();
     void prepareQuality (bool hq);            // (re)build oversampled stages for HQ on/off
     int  computeLatencySamples (bool truePeak);
+    void processChain (juce::AudioBuffer<Real>& buffer); // the double-precision DSP chain
+    void publishMeters (const juce::AudioBuffer<float>& output); // metering / analysis taps
 
     juce::AudioProcessorValueTreeState apvts {
         *this, nullptr, "PARAMS", mf::createParameterLayout() };
@@ -89,23 +100,28 @@ private:
     juce::AudioParameterBool* bypassParam   = nullptr;
     juce::AudioParameterBool* truePeakParam = nullptr;
 
-    mf::ParametricEQ         eq;
-    mf::MultibandCompressor  multiband;
-    mf::Saturation           saturation;
-    mf::StereoWidth          stereoWidth;
-    mf::Limiter              limiter;     // base-rate path
-    mf::Limiter              limiterOS;   // oversampled (true-peak) path
-    mf::LoudnessMeter        meter;
-    mf::SpectrumAnalyzer     analyzer;
+    mf::ParametricEQT<Real>          eq;
+    mf::MultibandCompressorT<Real>   multiband;
+    mf::SaturationT<Real>            saturation;
+    mf::StereoWidthT<Real>           stereoWidth;
+    mf::LimiterT<Real>               limiter;     // base-rate path
+    mf::LimiterT<Real>               limiterOS;   // oversampled (true-peak) path
+    mf::LoudnessMeter                meter;       // metering stays single precision
+    mf::SpectrumAnalyzer             analyzer;
 
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    std::unique_ptr<juce::dsp::Oversampling<Real>> oversampler;
     juce::dsp::ProcessSpec spec {};
     int  osFactor = 1;
     bool lastTruePeak = false;
     bool lastHq = false;
     bool lastLinear = false;
 
-    juce::dsp::Gain<float> inputGain, outputGain;
+    juce::dsp::Gain<Real> inputGain, outputGain;
+
+    // Boundary scratch: up-convert a float host block to double and back, and a
+    // float copy of the output to feed the (single-precision) meters/analyzer.
+    juce::AudioBuffer<Real>  doubleScratch;
+    juce::AudioBuffer<float> meterScratch;
 
     double currentSampleRate = 44100.0;
 

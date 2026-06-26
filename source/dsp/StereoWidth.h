@@ -10,8 +10,12 @@ namespace mf
     width = 1.0 (100%) is unity. Below that the image narrows toward mono
     (0% = fully mono); above that the side signal is boosted to widen it.
     A no-op on mono signals.
+
+    Templated on the sample type so the processor can run it at 64-bit double
+    internally (float alias `StereoWidth` kept for the standalone DSP tests).
 */
-class StereoWidth
+template <typename Sample>
+class StereoWidthT
 {
 public:
     void prepare (const juce::dsp::ProcessSpec& spec)
@@ -24,10 +28,10 @@ public:
     /** @param widthPercent 0..200 */
     void setWidth (float widthPercent)
     {
-        widthSmoothed.setTargetValue (widthPercent * 0.01f);
+        widthSmoothed.setTargetValue ((Sample) (widthPercent * 0.01f));
     }
 
-    void process (juce::AudioBuffer<float>& buffer)
+    void process (juce::AudioBuffer<Sample>& buffer)
     {
         if (buffer.getNumChannels() < 2)
         {
@@ -41,9 +45,9 @@ public:
 
         for (int i = 0; i < numSamples; ++i)
         {
-            const float w    = widthSmoothed.getNextValue();
-            const float mid  = 0.5f * (left[i] + right[i]);
-            const float side = 0.5f * (left[i] - right[i]) * w;
+            const Sample w    = widthSmoothed.getNextValue();
+            const Sample mid  = (Sample) 0.5 * (left[i] + right[i]);
+            const Sample side = (Sample) 0.5 * (left[i] - right[i]) * w;
 
             left[i]  = mid + side;
             right[i] = mid - side;
@@ -51,6 +55,8 @@ public:
     }
 
 private:
-    juce::SmoothedValue<float> widthSmoothed { 1.0f };
+    juce::SmoothedValue<Sample> widthSmoothed { (Sample) 1 };
 };
+
+using StereoWidth = StereoWidthT<float>;
 } // namespace mf

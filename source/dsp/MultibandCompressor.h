@@ -13,8 +13,12 @@ namespace mf
     band matches the phase shift the second crossover adds to the mid/high path,
     so summing the bands reconstructs flat. Attack/release/knee are shared;
     threshold/ratio/makeup are per band.
+
+    Templated on the sample type so the crossovers and per-band compressors run
+    at 64-bit double internally (float alias `MultibandCompressor` for the tests).
 */
-class MultibandCompressor
+template <typename Sample>
+class MultibandCompressorT
 {
 public:
     void prepare (const juce::dsp::ProcessSpec& spec)
@@ -70,7 +74,7 @@ public:
         compHigh.setParameters (hiThr, hiRatio, attackMs, releaseMs, kneeDb, hiMakeup);
     }
 
-    void process (juce::AudioBuffer<float>& buffer)
+    void process (juce::AudioBuffer<Sample>& buffer)
     {
         const int ch = buffer.getNumChannels();
         const int n  = buffer.getNumSamples();
@@ -79,9 +83,9 @@ public:
         // (The scratch buffers are allocated at the maximum block size; processing
         // their full allocated length on a shorter block would run the filters and
         // band compressors over stale samples and is block-size dependent.)
-        juce::AudioBuffer<float> low  (lowBuf.getArrayOfWritePointers(),  ch, n);
-        juce::AudioBuffer<float> mid  (midBuf.getArrayOfWritePointers(),  ch, n);
-        juce::AudioBuffer<float> high (highBuf.getArrayOfWritePointers(), ch, n);
+        juce::AudioBuffer<Sample> low  (lowBuf.getArrayOfWritePointers(),  ch, n);
+        juce::AudioBuffer<Sample> mid  (midBuf.getArrayOfWritePointers(),  ch, n);
+        juce::AudioBuffer<Sample> high (highBuf.getArrayOfWritePointers(), ch, n);
 
         for (int c = 0; c < ch; ++c)
         {
@@ -117,7 +121,7 @@ public:
     float getReductionHigh() const noexcept { return grHigh; }
 
 private:
-    void applyFilter (juce::dsp::LinkwitzRileyFilter<float>& f, juce::AudioBuffer<float>& b)
+    void applyFilter (juce::dsp::LinkwitzRileyFilter<Sample>& f, juce::AudioBuffer<Sample>& b)
     {
         const int ch = b.getNumChannels();
         const int n  = b.getNumSamples();
@@ -131,10 +135,12 @@ private:
 
     double sampleRate = 44100.0;
 
-    juce::dsp::LinkwitzRileyFilter<float> lpLow, apLow, hpA, lpMid, hpHigh;
-    Compressor compLow, compMid, compHigh;
-    juce::AudioBuffer<float> lowBuf, midBuf, highBuf;
+    juce::dsp::LinkwitzRileyFilter<Sample> lpLow, apLow, hpA, lpMid, hpHigh;
+    CompressorT<Sample> compLow, compMid, compHigh;
+    juce::AudioBuffer<Sample> lowBuf, midBuf, highBuf;
 
     float grLow = 0.0f, grMid = 0.0f, grHigh = 0.0f;
 };
+
+using MultibandCompressor = MultibandCompressorT<float>;
 } // namespace mf

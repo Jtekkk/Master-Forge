@@ -15,8 +15,12 @@ namespace mf
     the gain can ramp down smoothly before the peak reaches the (delayed)
     output. A final hard clamp at the ceiling catches any sub-sample overshoot
     left by the smoothing, guaranteeing the output never exceeds the ceiling.
+
+    Templated on the sample type so the delay line and gain stage run at 64-bit
+    double internally (float alias `Limiter` kept for the standalone DSP tests).
 */
-class Limiter
+template <typename Sample>
+class LimiterT
 {
 public:
     void prepare (const juce::dsp::ProcessSpec& spec)
@@ -29,7 +33,7 @@ public:
         delayBuffer.setSize (numCh, lookaheadSamples + maxBlock + 4);
 
         // Attack settles well within the lookahead window (~5 time constants).
-        attackCoeff = std::exp (-1.0f / juce::jmax (1.0f, lookaheadSamples * 0.2f));
+        attackCoeff = std::exp (-(Sample) 1 / (Sample) juce::jmax (1.0f, lookaheadSamples * 0.2f));
 
         dqCapacity = lookaheadSamples + 1;
         dq.assign ((size_t) dqCapacity, {});
@@ -42,21 +46,21 @@ public:
     {
         delayBuffer.clear();
         writePos      = 0;
-        gainState     = 1.0f;
+        gainState     = (Sample) 1;
         sampleCounter = 0;
         dqHead = dqTail = 0;
     }
 
     void setParameters (float ceilingDb, float releaseMs_)
     {
-        ceiling = juce::Decibels::decibelsToGain (ceilingDb);
+        ceiling = (Sample) juce::Decibels::decibelsToGain (ceilingDb);
         setRelease (releaseMs_);
     }
 
     int getLatencySamples() const noexcept { return lookaheadSamples; }
 
     /** Processes in place. Returns peak gain reduction (dB, >= 0) for metering. */
-    float process (juce::AudioBuffer<float>& buffer)
+    float process (juce::AudioBuffer<Sample>& buffer)
     {
         const int numCh      = buffer.getNumChannels();
         const int numSamples = buffer.getNumSamples();
@@ -67,17 +71,17 @@ public:
 
         for (int i = 0; i < numSamples; ++i)
         {
-            float peak = 0.0f;
+            Sample peak = (Sample) 0;
             for (int ch = 0; ch < numCh; ++ch)
                 peak = juce::jmax (peak, std::abs (data[ch][i]));
 
             pushMax (peak);
-            const float windowPeak = dqFront().value;
-            const float target = (windowPeak > ceiling) ? (ceiling / windowPeak) : 1.0f;
+            const Sample windowPeak = dqFront().value;
+            const Sample target = (windowPeak > ceiling) ? (ceiling / windowPeak) : (Sample) 1;
 
             // Fast (lookahead-matched) attack down, smooth release up.
-            const float coeff = (target < gainState) ? attackCoeff : releaseCoeff;
-            gainState = coeff * gainState + (1.0f - coeff) * target;
+            const Sample coeff = (target < gainState) ? attackCoeff : releaseCoeff;
+            gainState = coeff * gainState + ((Sample) 1 - coeff) * target;
 
             for (int ch = 0; ch < numCh; ++ch)
             {
@@ -88,7 +92,7 @@ public:
                 if (readPos < 0)
                     readPos += delaySize;
 
-                const float out = d[readPos] * gainState;
+                const Sample out = d[readPos] * gainState;
                 data[ch][i] = juce::jlimit (-ceiling, ceiling, out); // brickwall safety
             }
 
@@ -96,7 +100,7 @@ public:
                 writePos = 0;
 
             maxReductionDb = juce::jmax (maxReductionDb,
-                                         -juce::Decibels::gainToDecibels (gainState, -60.0f));
+                                         -(float) juce::Decibels::gainToDecibels (gainState, (Sample) -60));
         }
 
         return maxReductionDb;
@@ -106,12 +110,12 @@ private:
     void setRelease (float ms)
     {
         releaseMs = ms;
-        const float t = juce::jmax (1.0f, ms) * 0.001f;
-        releaseCoeff = std::exp (-1.0f / (t * static_cast<float> (sampleRate)));
+        const Sample t = (Sample) (juce::jmax (1.0f, ms) * 0.001f);
+        releaseCoeff = std::exp (-(Sample) 1 / (t * (Sample) sampleRate));
     }
 
     // --- fixed-capacity monotonic deque of (sampleIndex, value) -------------
-    struct MaxEntry { long long index = 0; float value = 0.0f; };
+    struct MaxEntry { long long index = 0; Sample value = (Sample) 0; };
 
     MaxEntry& dqFront()        { return dq[(size_t) dqHead]; }
     bool      dqEmpty() const  { return dqHead == dqTail; }
@@ -130,7 +134,7 @@ private:
         if (++dqTail >= dqCapacity) dqTail = 0;
     }
 
-    void pushMax (float v)
+    void pushMax (Sample v)
     {
         // Drop entries that have fallen outside the lookahead window first, so
         // the deque never holds more than `lookaheadSamples` entries.
@@ -150,17 +154,19 @@ private:
     float  lookaheadMs    = 5.0f;
     int    lookaheadSamples = 1;
 
-    float  ceiling      = 1.0f;
+    Sample ceiling      = (Sample) 1;
     float  releaseMs    = 100.0f;
-    float  attackCoeff  = 0.0f;
-    float  releaseCoeff = 0.0f;
-    float  gainState    = 1.0f;
+    Sample attackCoeff  = (Sample) 0;
+    Sample releaseCoeff = (Sample) 0;
+    Sample gainState    = (Sample) 1;
 
-    juce::AudioBuffer<float> delayBuffer;
+    juce::AudioBuffer<Sample> delayBuffer;
     int writePos = 0;
 
     std::vector<MaxEntry> dq;
     int dqCapacity = 1, dqHead = 0, dqTail = 0;
     long long sampleCounter = 0;
 };
+
+using Limiter = LimiterT<float>;
 } // namespace mf

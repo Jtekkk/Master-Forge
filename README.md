@@ -17,9 +17,10 @@ input gain → 4-band EQ → 3-band multiband comp → saturation → stereo wid
 | Module | What it does |
 | --- | --- |
 | **Input / Output gain** | Trim level into the chain and drive into the limiter (±24 dB). |
-| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the colour-coded band handles (with a live freq/gain/Q readout); mouse-wheel a bell handle to change its Q. **Stereo / Mid / Side** processing mode and a **freeze** button for the analyzer. |
+| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the colour-coded band handles (with a live freq/gain/Q readout); mouse-wheel a bell handle to change its Q. **Stereo / Mid / Side** mode, a **freeze** button, and a **Linear-phase** mode (FIR, phase-coherent, +512 samples latency). |
 | **3-band multiband compressor** | Linkwitz-Riley crossovers split the signal into low/mid/high bands, each with its own threshold, ratio and makeup (attack/release/knee are shared). Phase-compensated so the bands sum back flat. |
-| **Saturation** | Smooth `tanh` drive with a dry/wet mix for harmonic warmth, **4x oversampled** so it stays clean (aliasing ~−78 dB vs ~−15 dB un-oversampled). |
+| **THD / saturation** | A single **THD** knob adds tanh harmonic warmth (0% clean → 100% heavy). Oversampled so it stays clean — aliasing ~−62 dB at 4x, **~−110 dB with the HQ (16x) switch**. |
+| **64-bit precision** | The entire chain — EQ, crossovers, compressors, saturation, limiter — runs internally at **double precision (64-bit)** regardless of the host. A double-precision host is processed natively; a single-precision host is converted only at the in/out boundary. |
 | **Stereo width** | Mid/Side width from mono (0%) to wide (200%). |
 | **Brickwall limiter** | 5 ms lookahead, sliding-window peak detection and a ceiling-clamped safety net — the output never exceeds the ceiling. An optional **True Peak** mode limits on a 4× linear-phase oversampled signal to catch inter-sample peaks. Reports latency to the host. |
 | **Metering** | Momentary / short-term / gated-integrated **LUFS** (ITU-R BS.1770), output peak meters with peak-hold, per-band + limiter gain-reduction bars and a **stereo correlation** meter. |
@@ -119,7 +120,12 @@ tools/
 
 ## Status
 
-Version 0.3.0 — full "awesome UI" pass on top of the v0.2 feature set:
+Version 0.5.0 — quality pass: a single **THD** knob, an **HQ (16x)**
+oversampling switch, a **linear-phase EQ** mode, an anti-aliased saturator, and
+**internal 64-bit double-precision processing** throughout the chain (native on
+double-precision hosts, boundary-converted on single-precision hosts).
+
+Earlier — full "awesome UI" pass on top of the v0.2 feature set:
 forge/ember theme with glowing knobs and a gradient analyzer, draggable EQ
 handles with a live readout, Stereo/Mid/Side EQ mode, analyzer freeze, a stereo
 correlation meter, and AU/AAX build targets alongside VST3. Possible next steps:

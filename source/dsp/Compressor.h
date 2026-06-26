@@ -14,8 +14,12 @@ namespace mf
     (a peak detector there modulates the signal within each cycle and adds
     audible harmonic distortion). The static curve is the classic soft-knee
     formulation from Giannoulis, Massberg & Reiss (JAES 2012).
+
+    Templated on the sample type so the processor can run the whole detector and
+    gain stage at 64-bit double (float alias `Compressor` kept for the tests).
 */
-class Compressor
+template <typename Sample>
+class CompressorT
 {
 public:
     void prepare (const juce::dsp::ProcessSpec& spec)
@@ -25,7 +29,7 @@ public:
         reset();
     }
 
-    void reset() { msEnv = 0.0f; grEnv = 0.0f; }
+    void reset() { msEnv = (Sample) 0; grEnv = (Sample) 0; }
 
     void setParameters (float thresholdDb, float ratio_, float attackMs,
                         float releaseMs, float kneeDb, float makeupDb)
@@ -33,14 +37,14 @@ public:
         threshold = thresholdDb;
         ratio     = juce::jmax (1.0f, ratio_);
         knee      = juce::jmax (0.0f, kneeDb);
-        makeupGain = juce::Decibels::decibelsToGain (makeupDb);
+        makeupGain = (Sample) juce::Decibels::decibelsToGain (makeupDb);
 
         attackCoeff  = timeToCoeff (attackMs);
         releaseCoeff = timeToCoeff (releaseMs);
     }
 
     /** Processes in place. Returns the peak gain reduction (dB, >= 0) for metering. */
-    float process (juce::AudioBuffer<float>& buffer)
+    float process (juce::AudioBuffer<Sample>& buffer)
     {
         const int numCh      = buffer.getNumChannels();
         const int numSamples = buffer.getNumSamples();
@@ -51,62 +55,65 @@ public:
         for (int i = 0; i < numSamples; ++i)
         {
             // Linked detector: loudest squared sample across channels.
-            float peakSq = 0.0f;
+            Sample peakSq = (Sample) 0;
             for (int ch = 0; ch < numCh; ++ch)
                 peakSq = juce::jmax (peakSq, data[ch][i] * data[ch][i]);
 
             // Stage 1: symmetric RMS pre-average. Smoothing the power here (rather
             // than branching) keeps the level steady within a waveform cycle, so
             // the gain doesn't modulate the signal (the source of bass distortion).
-            msEnv = rmsCoeff * msEnv + (1.0f - rmsCoeff) * peakSq;
+            msEnv = rmsCoeff * msEnv + ((Sample) 1 - rmsCoeff) * peakSq;
 
-            const float levelDb = 10.0f * std::log10 (juce::jmax (msEnv, 1.0e-10f));
-            const float targetReductionDb = levelDb - computeCurve (levelDb); // >= 0
+            const Sample levelDb = (Sample) 10 * std::log10 (juce::jmax (msEnv, (Sample) 1.0e-10));
+            const Sample targetReductionDb = levelDb - computeCurve (levelDb); // >= 0
 
             // Stage 2: attack/release envelope on the gain reduction.
-            const float coeff = (targetReductionDb > grEnv) ? attackCoeff : releaseCoeff;
-            grEnv = coeff * grEnv + (1.0f - coeff) * targetReductionDb;
+            const Sample coeff = (targetReductionDb > grEnv) ? attackCoeff : releaseCoeff;
+            grEnv = coeff * grEnv + ((Sample) 1 - coeff) * targetReductionDb;
 
-            const float gain = juce::Decibels::decibelsToGain (-grEnv) * makeupGain;
+            const Sample gain = juce::Decibels::decibelsToGain (-grEnv) * makeupGain;
             for (int ch = 0; ch < numCh; ++ch)
                 data[ch][i] *= gain;
 
-            maxReductionDb = juce::jmax (maxReductionDb, grEnv);
+            maxReductionDb = juce::jmax (maxReductionDb, (float) grEnv);
         }
 
         return maxReductionDb;
     }
 
 private:
-    float timeToCoeff (float timeMs) const
+    Sample timeToCoeff (float timeMs) const
     {
-        const float t = juce::jmax (0.01f, timeMs) * 0.001f; // seconds
-        return std::exp (-1.0f / (t * static_cast<float> (sampleRate)));
+        const Sample t = (Sample) (juce::jmax (0.01f, timeMs) * 0.001f); // seconds
+        return std::exp (-(Sample) 1 / (t * (Sample) sampleRate));
     }
 
     /** Output level (dB) for a given input level (dB) on the static curve. */
-    float computeCurve (float xDb) const
+    Sample computeCurve (Sample xDb) const
     {
-        const float over = xDb - threshold;
+        const Sample over = xDb - (Sample) threshold;
 
-        if (2.0f * over < -knee)                 // fully below the knee
+        if ((Sample) 2 * over < -(Sample) knee)                 // fully below the knee
             return xDb;
 
-        if (knee > 0.0f && 2.0f * std::abs (over) <= knee) // inside the knee
+        if (knee > 0.0f && (Sample) 2 * std::abs (over) <= (Sample) knee) // inside the knee
         {
-            const float t = over + 0.5f * knee;
-            return xDb + (1.0f / ratio - 1.0f) * (t * t) / (2.0f * knee);
+            const Sample t = over + (Sample) 0.5 * (Sample) knee;
+            return xDb + ((Sample) 1 / (Sample) ratio - (Sample) 1) * (t * t) / ((Sample) 2 * (Sample) knee);
         }
 
-        return threshold + over / ratio;          // above the knee
+        return (Sample) threshold + over / (Sample) ratio;       // above the knee
     }
 
     double sampleRate = 44100.0;
-    float  threshold = -18.0f, ratio = 2.0f, knee = 6.0f, makeupGain = 1.0f;
-    float  attackCoeff = 0.0f, releaseCoeff = 0.0f;
-    float  msEnv = 0.0f, grEnv = 0.0f;
+    float  threshold = -18.0f, ratio = 2.0f, knee = 6.0f;
+    Sample makeupGain = (Sample) 1;
+    Sample attackCoeff = (Sample) 0, releaseCoeff = (Sample) 0;
+    Sample msEnv = (Sample) 0, grEnv = (Sample) 0;
 
     static constexpr float rmsMs = 30.0f;  // RMS detector averaging window
-    float rmsCoeff = 0.0f;
+    Sample rmsCoeff = (Sample) 0;
 };
+
+using Compressor = CompressorT<float>;
 } // namespace mf

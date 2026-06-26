@@ -153,6 +153,87 @@ int main()
                               + juce::String (d, 6).toStdString() + ")");
     }
 
+    // --- double-precision processing: the native AudioBuffer<double> path must
+    //     run, stay finite/under-ceiling, and match the float path sample for
+    //     sample (the chain is the same 64-bit engine; the float path only
+    //     truncates at the boundary). ---
+    std::cout << "[double precision]\n";
+    {
+        check (proc.supportsDoublePrecisionProcessing(),
+               "processor advertises double-precision support");
+
+        const int total = 6000;
+        const auto renderDouble = [&] (int bs)
+        {
+            MasterForgeAudioProcessor q;
+            q.setPlayConfigDetails (2, 2, sr, bs);
+            q.setProcessingPrecision (juce::AudioProcessor::doublePrecision);
+            q.prepareToPlay (sr, bs);
+            std::vector<float> out; out.reserve ((size_t) total);
+            juce::MidiBuffer m;
+            long long nn = 0; int pos = 0;
+            bool finite = true; float peak = 0.0f;
+            while (pos < total)
+            {
+                const int b = juce::jmin (bs, total - pos);
+                juce::AudioBuffer<double> buf (2, b);
+                for (int i = 0; i < b; ++i)
+                {
+                    const double s = 1.3 * std::sin (2.0 * kPi * 220.0 * (double) (nn + i) / sr);
+                    buf.setSample (0, i, s); buf.setSample (1, i, s);
+                }
+                nn += b; q.processBlock (buf, m);
+                for (int i = 0; i < b; ++i)
+                {
+                    const double v = buf.getSample (0, i);
+                    if (! std::isfinite (v)) finite = false;
+                    peak = juce::jmax (peak, (float) std::abs (v));
+                    out.push_back ((float) v);
+                }
+                pos += b;
+            }
+            return std::make_tuple (out, finite, peak);
+        };
+
+        const auto floatRef = [&] (int bs)
+        {
+            MasterForgeAudioProcessor q;
+            q.setPlayConfigDetails (2, 2, sr, bs);
+            q.prepareToPlay (sr, bs);
+            std::vector<float> out; out.reserve ((size_t) total);
+            juce::MidiBuffer m;
+            long long nn = 0; int pos = 0;
+            while (pos < total)
+            {
+                const int b = juce::jmin (bs, total - pos);
+                juce::AudioBuffer<float> buf (2, b);
+                for (int i = 0; i < b; ++i)
+                {
+                    const float s = (float) (1.3 * std::sin (2.0 * kPi * 220.0 * (double) (nn + i) / sr));
+                    buf.setSample (0, i, s); buf.setSample (1, i, s);
+                }
+                nn += b; q.processBlock (buf, m);
+                for (int i = 0; i < b; ++i) out.push_back (buf.getSample (0, i));
+                pos += b;
+            }
+            return out;
+        };
+
+        auto [dOut, dFinite, dPeak] = renderDouble (512);
+        auto fOut = floatRef (512);
+        check (dFinite, "double-precision output is finite");
+        // Fresh processors here use the default ceiling (-0.3 dB), not the -1 dB
+        // set on `proc` above.
+        const float defCeil = juce::Decibels::decibelsToGain (-0.3f);
+        check (dPeak <= defCeil + 1.0e-3f, "double-precision output stays under ceiling");
+
+        float maxDiff = 0.0f;
+        for (size_t i = 500; i < dOut.size(); ++i)
+            maxDiff = juce::jmax (maxDiff, std::abs (dOut[i] - fOut[i]));
+        check (maxDiff < 1.0e-5f,
+               "double and float paths agree (max diff " + juce::String (maxDiff, 7).toStdString() + ")");
+    }
+
     // --- editor constructs/destructs (headless: no native peer) ---
     std::cout << "[editor]\n";
     if (auto* editor = proc.createEditor())

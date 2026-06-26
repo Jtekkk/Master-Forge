@@ -20,8 +20,14 @@ namespace mf
         band actually changes.
 
     Mid/Side targeting (Stereo/Mid/Side) wraps either path.
+
+    Templated on the sample type so the IIR/FIR filtering runs at 64-bit double
+    internally (float alias `ParametricEQ` kept for the standalone DSP tests).
+    The linear-phase kernel is *designed* with a float FFT (magnitude response →
+    IFFT → window) and the resulting taps are stored in the sample type.
 */
-class ParametricEQ
+template <typename Sample>
+class ParametricEQT
 {
 public:
     enum Mode { stereo = 0, mid = 1, side = 2 };
@@ -32,9 +38,9 @@ public:
         iir.prepare (spec);
 
         // FIR starts as a unit impulse (pass-through) of the right length.
-        kernel.assign ((size_t) firTaps, 0.0f);
-        kernel[(size_t) (firTaps / 2)] = 1.0f;
-        fir.state = new juce::dsp::FIR::Coefficients<float> (kernel.data(), (size_t) firTaps);
+        kernel.assign ((size_t) firTaps, (Sample) 0);
+        kernel[(size_t) (firTaps / 2)] = (Sample) 1;
+        fir.state = new juce::dsp::FIR::Coefficients<Sample> (kernel.data(), (size_t) firTaps);
         fir.prepare (spec);
 
         freqBuf.assign ((size_t) fftSize, {});
@@ -53,18 +59,18 @@ public:
     {
         linearPhase = useLinearPhase;
 
-        using Coefs = juce::dsp::IIR::Coefficients<float>;
-        const auto g = [] (float dB) { return juce::Decibels::decibelsToGain (dB); };
+        using Coefs = juce::dsp::IIR::Coefficients<Sample>;
+        const auto g = [] (float dB) { return (Sample) juce::Decibels::decibelsToGain (dB); };
 
-        auto lowC  = Coefs::makeLowShelf  (sampleRate, lowFreq,  0.707f, g (lowGainDb));
-        auto lmC   = Coefs::makePeakFilter (sampleRate, lmFreq,  lmQ,    g (lmGainDb));
-        auto hmC   = Coefs::makePeakFilter (sampleRate, hmFreq,  hmQ,    g (hmGainDb));
-        auto highC = Coefs::makeHighShelf (sampleRate, highFreq, 0.707f, g (highGainDb));
+        auto lowC  = Coefs::makeLowShelf  (sampleRate, lowFreq,  (Sample) 0.707, g (lowGainDb));
+        auto lmC   = Coefs::makePeakFilter (sampleRate, lmFreq,  (Sample) lmQ,   g (lmGainDb));
+        auto hmC   = Coefs::makePeakFilter (sampleRate, hmFreq,  (Sample) hmQ,   g (hmGainDb));
+        auto highC = Coefs::makeHighShelf (sampleRate, highFreq, (Sample) 0.707, g (highGainDb));
 
-        *iir.get<0>().state = *lowC;
-        *iir.get<1>().state = *lmC;
-        *iir.get<2>().state = *hmC;
-        *iir.get<3>().state = *highC;
+        *iir.template get<0>().state = *lowC;
+        *iir.template get<1>().state = *lmC;
+        *iir.template get<2>().state = *hmC;
+        *iir.template get<3>().state = *highC;
 
         if (linearPhase)
         {
@@ -79,7 +85,7 @@ public:
         }
     }
 
-    void process (juce::AudioBuffer<float>& buffer, int msMode)
+    void process (juce::AudioBuffer<Sample>& buffer, int msMode)
     {
         const bool ms = (buffer.getNumChannels() >= 2 && msMode != stereo);
 
@@ -87,15 +93,15 @@ public:
 
         if (ms)
         {
-            juce::dsp::AudioBlock<float> block (buffer);
+            juce::dsp::AudioBlock<Sample> block (buffer);
             auto target = block.getSingleChannelBlock (msMode == mid ? 0 : 1);
-            juce::dsp::ProcessContextReplacing<float> ctx (target);
+            juce::dsp::ProcessContextReplacing<Sample> ctx (target);
             if (linearPhase) fir.process (ctx); else iir.process (ctx);
         }
         else
         {
-            juce::dsp::AudioBlock<float> block (buffer);
-            juce::dsp::ProcessContextReplacing<float> ctx (block);
+            juce::dsp::AudioBlock<Sample> block (buffer);
+            juce::dsp::ProcessContextReplacing<Sample> ctx (block);
             if (linearPhase) fir.process (ctx); else iir.process (ctx);
         }
 
@@ -103,39 +109,40 @@ public:
     }
 
 private:
-    using IIRBand = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
-                                                   juce::dsp::IIR::Coefficients<float>>;
+    using IIRBand = juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<Sample>,
+                                                   juce::dsp::IIR::Coefficients<Sample>>;
 
-    void encodeMS (juce::AudioBuffer<float>& buffer)
+    void encodeMS (juce::AudioBuffer<Sample>& buffer)
     {
         auto* L = buffer.getWritePointer (0);
         auto* R = buffer.getWritePointer (1);
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
-            const float m = 0.5f * (L[i] + R[i]);
-            const float s = 0.5f * (L[i] - R[i]);
+            const Sample m = (Sample) 0.5 * (L[i] + R[i]);
+            const Sample s = (Sample) 0.5 * (L[i] - R[i]);
             L[i] = m; R[i] = s;
         }
     }
 
-    void decodeMS (juce::AudioBuffer<float>& buffer)
+    void decodeMS (juce::AudioBuffer<Sample>& buffer)
     {
         auto* L = buffer.getWritePointer (0);
         auto* R = buffer.getWritePointer (1);
         for (int i = 0; i < buffer.getNumSamples(); ++i)
         {
-            const float m = L[i];
-            const float s = R[i];
+            const Sample m = L[i];
+            const Sample s = R[i];
             L[i] = m + s; R[i] = m - s;
         }
     }
 
-    void rebuildKernel (const juce::dsp::IIR::Coefficients<float>::Ptr& low,
-                        const juce::dsp::IIR::Coefficients<float>::Ptr& lm,
-                        const juce::dsp::IIR::Coefficients<float>::Ptr& hm,
-                        const juce::dsp::IIR::Coefficients<float>::Ptr& high)
+    void rebuildKernel (const typename juce::dsp::IIR::Coefficients<Sample>::Ptr& low,
+                        const typename juce::dsp::IIR::Coefficients<Sample>::Ptr& lm,
+                        const typename juce::dsp::IIR::Coefficients<Sample>::Ptr& hm,
+                        const typename juce::dsp::IIR::Coefficients<Sample>::Ptr& high)
     {
-        // Zero-phase target spectrum = combined magnitude response.
+        // Zero-phase target spectrum = combined magnitude response. Designed in
+        // double precision then stored as the sample type.
         for (int k = 0; k <= fftSize / 2; ++k)
         {
             const double f = (double) k * sampleRate / fftSize;
@@ -158,10 +165,10 @@ private:
         {
             const int src = ((i - half) % fftSize + fftSize) % fftSize;
             const float w = 0.5f - 0.5f * std::cos (2.0f * juce::MathConstants<float>::pi * (float) i / (float) (firTaps - 1));
-            kernel[(size_t) i] = timeBuf[(size_t) src].real() * w;
+            kernel[(size_t) i] = (Sample) (timeBuf[(size_t) src].real() * w);
         }
 
-        *fir.state = juce::dsp::FIR::Coefficients<float> (kernel.data(), (size_t) firTaps);
+        *fir.state = juce::dsp::FIR::Coefficients<Sample> (kernel.data(), (size_t) firTaps);
     }
 
     static constexpr int firTaps = 1025;          // latency 512
@@ -172,14 +179,16 @@ private:
     bool   linearPhase = false;
 
     juce::dsp::ProcessorChain<IIRBand, IIRBand, IIRBand, IIRBand> iir;
-    juce::dsp::ProcessorDuplicator<juce::dsp::FIR::Filter<float>,
-                                   juce::dsp::FIR::Coefficients<float>> fir;
+    juce::dsp::ProcessorDuplicator<juce::dsp::FIR::Filter<Sample>,
+                                   juce::dsp::FIR::Coefficients<Sample>> fir;
 
-    juce::dsp::FFT fft { fftOrder };
+    juce::dsp::FFT fft { fftOrder };                       // kernel design only (float)
     std::vector<juce::dsp::Complex<float>> freqBuf, timeBuf;
-    std::vector<float> kernel;
+    std::vector<Sample> kernel;
 
     std::array<float, 10> cached {};
     bool cachedValid = false;
 };
+
+using ParametricEQ = ParametricEQT<float>;
 } // namespace mf

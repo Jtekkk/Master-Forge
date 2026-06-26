@@ -45,6 +45,12 @@ void MasterForgeAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     meter.prepare (sampleRate, numCh);
     analyzer.prepare (sampleRate);
 
+    // Boundary scratch for the float <-> double conversion and the float meters.
+    const int scratchCh = juce::jmax (numCh, getTotalNumInputChannels());
+    const int maxBlock  = juce::jmax (1, samplesPerBlock);
+    doubleScratch.setSize (scratchCh, maxBlock);
+    meterScratch.setSize  (scratchCh, maxBlock);
+
     lastTruePeak = truePeakParam->get();
     lastLinear   = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
     prepareQuality (apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f);
@@ -56,9 +62,9 @@ void MasterForgeAudioProcessor::prepareQuality (bool hq)
 
     saturation.prepare (spec, stages);
 
-    oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
+    oversampler = std::make_unique<juce::dsp::Oversampling<Real>> (
         (size_t) spec.numChannels, (size_t) stages,
-        juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        juce::dsp::Oversampling<Real>::filterHalfBandFIREquiripple, true, true);
     oversampler->initProcessing ((size_t) spec.maximumBlockSize);
     oversampler->reset();
     osFactor = (int) oversampler->getOversamplingFactor();
@@ -126,6 +132,61 @@ void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear (ch, 0, buffer.getNumSamples());
 
+    const int numCh = buffer.getNumChannels();
+    const int n     = buffer.getNumSamples();
+
+    // Up-convert the float host block into the double scratch, run the chain at
+    // 64-bit, then write the result back down to the host buffer.
+    juce::AudioBuffer<Real> work (doubleScratch.getArrayOfWritePointers(), numCh, n);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const auto* src = buffer.getReadPointer (ch);
+        auto* dst       = work.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+            dst[i] = (Real) src[i];
+    }
+
+    processChain (work);
+
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const auto* src = work.getReadPointer (ch);
+        auto* dst       = buffer.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+            dst[i] = (float) src[i];
+    }
+
+    publishMeters (buffer);
+}
+
+void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<double>& buffer,
+                                              juce::MidiBuffer&)
+{
+    juce::ScopedNoDenormals noDenormals;
+
+    for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
+        buffer.clear (ch, 0, buffer.getNumSamples());
+
+    // A double-precision host feeds us double directly — no boundary conversion.
+    processChain (buffer);
+
+    // The meters / analyzer are single precision: hand them a float copy.
+    const int numCh = buffer.getNumChannels();
+    const int n     = buffer.getNumSamples();
+    juce::AudioBuffer<float> fb (meterScratch.getArrayOfWritePointers(), numCh, n);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const auto* src = buffer.getReadPointer (ch);
+        auto* dst       = fb.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+            dst[i] = (float) src[i];
+    }
+
+    publishMeters (fb);
+}
+
+void MasterForgeAudioProcessor::processChain (juce::AudioBuffer<Real>& buffer)
+{
     updateParameters();
 
     // Quality-mode changes: re-prepare the oversampled stages when HQ toggles,
@@ -147,58 +208,60 @@ void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         compMidDb.store (0.0f);
         compHiDb.store  (0.0f);
         limReductionDb.store (0.0f);
+        return;                               // signal passes through untouched
+    }
+
+    juce::dsp::AudioBlock<Real> block (buffer);
+    juce::dsp::ProcessContextReplacing<Real> context (block);
+
+    inputGain.process (context);
+    eq.process (buffer, (int) apvts.getRawParameterValue (pid::eqMode)->load());
+
+    multiband.process (buffer);
+    compLowDb.store (multiband.getReductionLow());
+    compMidDb.store (multiband.getReductionMid());
+    compHiDb.store  (multiband.getReductionHigh());
+
+    saturation.process (buffer);
+    stereoWidth.process (buffer);
+    outputGain.process (context);
+
+    // --- limiter (with optional true-peak oversampling) ---
+    const bool truePeak = truePeakParam->get();
+    if (truePeak != lastTruePeak)
+    {
+        setLatencySamples (computeLatencySamples (truePeak));
+        if (oversampler != nullptr)
+            oversampler->reset();
+        lastTruePeak = truePeak;
+    }
+
+    float limGr = 0.0f;
+    if (truePeak && oversampler != nullptr)
+    {
+        juce::dsp::AudioBlock<Real> baseBlock (buffer);
+        auto osBlock = oversampler->processSamplesUp (baseBlock);
+
+        const int osCh = (int) osBlock.getNumChannels();
+        const int osN  = (int) osBlock.getNumSamples();
+        Real* ptrs[8] = {};
+        for (int c = 0; c < osCh && c < 8; ++c)
+            ptrs[c] = osBlock.getChannelPointer ((size_t) c);
+
+        juce::AudioBuffer<Real> osBuffer (ptrs, osCh, osN);
+        limGr = limiterOS.process (osBuffer);
+
+        oversampler->processSamplesDown (baseBlock);
     }
     else
     {
-        juce::dsp::AudioBlock<float> block (buffer);
-        juce::dsp::ProcessContextReplacing<float> context (block);
-
-        inputGain.process (context);
-        eq.process (buffer, (int) apvts.getRawParameterValue (pid::eqMode)->load());
-
-        multiband.process (buffer);
-        compLowDb.store (multiband.getReductionLow());
-        compMidDb.store (multiband.getReductionMid());
-        compHiDb.store  (multiband.getReductionHigh());
-
-        saturation.process (buffer);
-        stereoWidth.process (buffer);
-        outputGain.process (context);
-
-        // --- limiter (with optional true-peak oversampling) ---
-        const bool truePeak = truePeakParam->get();
-        if (truePeak != lastTruePeak)
-        {
-            setLatencySamples (computeLatencySamples (truePeak));
-            if (oversampler != nullptr)
-                oversampler->reset();
-            lastTruePeak = truePeak;
-        }
-
-        float limGr = 0.0f;
-        if (truePeak && oversampler != nullptr)
-        {
-            juce::dsp::AudioBlock<float> baseBlock (buffer);
-            auto osBlock = oversampler->processSamplesUp (baseBlock);
-
-            const int osCh = (int) osBlock.getNumChannels();
-            const int osN  = (int) osBlock.getNumSamples();
-            float* ptrs[8] = {};
-            for (int c = 0; c < osCh && c < 8; ++c)
-                ptrs[c] = osBlock.getChannelPointer ((size_t) c);
-
-            juce::AudioBuffer<float> osBuffer (ptrs, osCh, osN);
-            limGr = limiterOS.process (osBuffer);
-
-            oversampler->processSamplesDown (baseBlock);
-        }
-        else
-        {
-            limGr = limiter.process (buffer);
-        }
-        limReductionDb.store (limGr);
+        limGr = limiter.process (buffer);
     }
+    limReductionDb.store (limGr);
+}
 
+void MasterForgeAudioProcessor::publishMeters (const juce::AudioBuffer<float>& buffer)
+{
     // Metering / analysis on the output (works in bypass too, showing dry level).
     meter.process (buffer);
     analyzer.pushBuffer (buffer);
