@@ -7,23 +7,22 @@
 namespace mf
 {
 /**
-    Smooth tanh saturator with a dry/wet mix, oversampled to suppress aliasing.
-
-    y = tanh(drive * x) / drive keeps unity gain for quiet signals while
-    progressively rounding peaks as drive increases. A memoryless nonlinearity
-    like this generates harmonics above Nyquist that fold back as inharmonic
-    aliasing, so the wet path is processed at 4x (linear-phase FIR oversampling)
-    and the dry/wet blend is done in the oversampled domain — that way the dry
-    and wet share the oversampler's latency and stay phase-aligned.
+    Harmonic "THD" stage: a smooth tanh nonlinearity blended with the dry signal,
+    driven by a single THD amount (0..100%). It is oversampled (4x normally, 16x
+    in HQ mode) with linear-phase FIR filters so the added harmonics don't alias,
+    and the dry/wet blend is done in the oversampled domain so the two stay
+    phase-aligned.
 */
 class Saturation
 {
 public:
-    void prepare (const juce::dsp::ProcessSpec& spec)
+    /** @param stages number of 2x oversampling stages (2 = 4x, 4 = 16x). */
+    void prepare (const juce::dsp::ProcessSpec& spec, int stages)
     {
-        const auto numCh = juce::jmax (1u, spec.numChannels);
+        currentStages = juce::jmax (1, stages);
         oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
-            numCh, osStages, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, false);
+            juce::jmax (1u, spec.numChannels), (size_t) currentStages,
+            juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, false);
         oversampler->initProcessing (spec.maximumBlockSize);
         oversampler->reset();
         osFactor = (int) oversampler->getOversamplingFactor();
@@ -34,15 +33,19 @@ public:
 
     void reset() { if (oversampler != nullptr) oversampler->reset(); }
 
+    int getStages() const noexcept { return currentStages; }
+
     int getLatencySamples() const noexcept
     {
         return oversampler != nullptr ? (int) std::round (oversampler->getLatencyInSamples()) : 0;
     }
 
-    void setParameters (float driveDb, float mixPercent)
+    /** @param thdPercent 0..100 — harmonic amount (0 = clean). */
+    void setThd (float thdPercent)
     {
-        driveSmoothed.setTargetValue (juce::jmax (1.0f, juce::Decibels::decibelsToGain (driveDb)));
-        mixSmoothed.setTargetValue   (juce::jlimit (0.0f, 1.0f, mixPercent * 0.01f));
+        const float t = juce::jlimit (0.0f, 1.0f, thdPercent * 0.01f);
+        driveSmoothed.setTargetValue (1.0f + t * driveScale);
+        mixSmoothed.setTargetValue   (t);
     }
 
     void process (juce::AudioBuffer<float>& buffer)
@@ -75,9 +78,10 @@ public:
     }
 
 private:
-    static constexpr size_t osStages = 2; // 4x
+    static constexpr float driveScale = 9.0f; // THD 100% -> drive 10x
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    int currentStages = 2;
     int osFactor = 1;
 
     juce::SmoothedValue<float> driveSmoothed { 1.0f };

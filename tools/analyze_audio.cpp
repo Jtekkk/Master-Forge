@@ -218,7 +218,7 @@ int main()
 
     std::cout << "\n[Aliasing — nonlinear stages, high tone (lower dB = cleaner)]\n";
     aliasingDb ("clean (sat off)  ", 14000.0, -6.0f, [] (auto&) {});
-    aliasingDb ("saturation 12/100", 14000.0, -6.0f, [] (auto& p) { setP (p, mf::pid::satDrive, 12.0f); setP (p, mf::pid::satMix, 100.0f); });
+    aliasingDb ("saturation 12/100", 14000.0, -6.0f, [] (auto& p) { setP (p, mf::pid::thd, 60.0f); });
     aliasingDb ("hot into limiter ", 14000.0,  3.0f, [] (auto& p) { setP (p, mf::pid::limCeiling, -6.0f); });
 
     std::cout << "\n[Block-size consistency — output must not depend on buffering]\n";
@@ -282,11 +282,11 @@ int main()
         cmp ("dsp::Gain   ", [&] { auto g = std::make_shared<juce::dsp::Gain<float>>(); g->prepare (spec); g->setRampDurationSeconds (0.02);
             return PF ([g] (juce::AudioBuffer<float>& buf) { g->setGainDecibels (0.0f); juce::dsp::AudioBlock<float> b (buf); g->process (juce::dsp::ProcessContextReplacing<float> (b)); }); });
         cmp ("ParametricEQ", [&] { auto e = std::make_shared<mf::ParametricEQ>(); e->prepare (spec);
-            return PF ([e] (juce::AudioBuffer<float>& buf) { e->setParameters (100,2,400,0,0.7f,3000,0,0.7f,10000,0); e->process (buf, 0); }); });
+            return PF ([e] (juce::AudioBuffer<float>& buf) { e->setParameters (100,2,400,0,0.7f,3000,0,0.7f,10000,0, false); e->process (buf, 0); }); });
         cmp ("Multiband   ", [&] { auto m = std::make_shared<mf::MultibandCompressor>(); m->prepare (spec);
             return PF ([m] (juce::AudioBuffer<float>& buf) { m->setParameters (200,2500,10,150,6, -18,1,0, -18,1,0, -18,1,0); m->process (buf); }); });
-        cmp ("Saturation  ", [&] { auto s = std::make_shared<mf::Saturation>(); s->prepare (spec);
-            return PF ([s] (juce::AudioBuffer<float>& buf) { s->setParameters (6,0); s->process (buf); }); });
+        cmp ("Saturation  ", [&] { auto s = std::make_shared<mf::Saturation>(); s->prepare (spec, 2);
+            return PF ([s] (juce::AudioBuffer<float>& buf) { s->setThd (60.0f); s->process (buf); }); });
         cmp ("StereoWidth ", [&] { auto w = std::make_shared<mf::StereoWidth>(); w->prepare (spec);
             return PF ([w] (juce::AudioBuffer<float>& buf) { w->setWidth (100); w->process (buf); }); });
         cmp ("Limiter     ", [&] { auto l = std::make_shared<mf::Limiter>(); l->prepare (spec);
@@ -297,13 +297,13 @@ int main()
         const auto makeChain = [&] { auto c = std::make_shared<Chain>();
             c->ig.prepare (spec); c->ig.setRampDurationSeconds (0.02);
             c->og.prepare (spec); c->og.setRampDurationSeconds (0.02);
-            c->eq.prepare (spec); c->mb.prepare (spec); c->sat.prepare (spec); c->w.prepare (spec); c->lim.prepare (spec);
+            c->eq.prepare (spec); c->mb.prepare (spec); c->sat.prepare (spec, 2); c->w.prepare (spec); c->lim.prepare (spec);
             return c; };
         const auto setChain = [] (Chain& c) {
             c.ig.setGainDecibels (0.0f); c.og.setGainDecibels (0.0f);
-            c.eq.setParameters (100,0,400,0,0.7f,3000,0,0.7f,10000,0);
+            c.eq.setParameters (100,0,400,0,0.7f,3000,0,0.7f,10000,0, false);
             c.mb.setParameters (200,2500,10,150,6, -18,1,0, -18,1,0, -18,1,0);
-            c.sat.setParameters (6,0); c.w.setWidth (100); c.lim.setParameters (-0.3f, 100); };
+            c.sat.setThd (0.0f); c.w.setWidth (100); c.lim.setParameters (-0.3f, 100); };
 
         cmp ("FULL chain  ", [&] { auto c = makeChain();
             return PF ([c, setChain] (juce::AudioBuffer<float>& buf) { setChain (*c);
@@ -323,6 +323,30 @@ int main()
             return PF ([c, setChain] (juce::AudioBuffer<float>& buf) { setChain (*c);
                 c->eq.process (buf, 0); c->mb.process (buf);
                 c->sat.process (buf); c->w.process (buf); c->lim.process (buf); }); });
+    }
+
+    std::cout << "\n[HQ oversampling — aliasing should drop further]\n";
+    aliasingDb ("THD 60, HQ off", 14000.0, -6.0f, [] (auto& p) { setP (p, mf::pid::thd, 60.0f); });
+    aliasingDb ("THD 60, HQ on ", 14000.0, -6.0f, [] (auto& p) { setP (p, mf::pid::thd, 60.0f); setP (p, mf::pid::hqMode, 1.0f); });
+
+    std::cout << "\n[THD knob calibration — measured THD of a -12 dBFS 1 kHz tone]\n";
+    for (float t : { 5.0f, 10.0f, 25.0f, 50.0f, 100.0f })
+        thdScenario ("THD " + juce::String ((int) t) + "%   ", 1000.0, -12.0f,
+                     [t] (auto& p) { setP (p, mf::pid::thd, t); });
+
+    std::cout << "\n[Linear-phase EQ — magnitude must match, with latency]\n";
+    {
+        MasterForgeAudioProcessor p;
+        p.setPlayConfigDetails (2, 2, SR, BLK);
+        p.prepareToPlay (SR, BLK);
+        setP (p, mf::pid::eqLinear, 1.0f);
+        setP (p, mf::pid::eqLowGain, 6.0f);   // +6 dB low shelf
+        setP (p, mf::pid::eqHighGain, -4.0f); // -4 dB high shelf
+        const double amp = juce::Decibels::decibelsToGain (-18.0);
+        std::cout << "  latency = " << p.getLatencySamples() << " samples\n";
+        for (double f : { 50.0, 1000.0, 12000.0 })
+            std::cout << "  " << juce::String (f, 0).paddedLeft (' ', 6) << " Hz : "
+                      << juce::String (gainDbAt (p, f, amp), 2) << " dB\n";
     }
 
     std::cout << "\n[Frequency response — default settings, should be flat]\n";

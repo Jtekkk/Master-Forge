@@ -119,8 +119,8 @@ int main()
     std::cout << "[Saturation]\n";
     {
         mf::Saturation sat;
-        sat.prepare (spec);
-        sat.setParameters (18.0f, 100.0f);
+        sat.prepare (spec, 2);
+        sat.setThd (80.0f);
 
         juce::AudioBuffer<float> buf (2, block);
         fillSine (buf, 440.0, sr, 0.9, 0);
@@ -155,7 +155,7 @@ int main()
     {
         mf::ParametricEQ eq;
         eq.prepare (spec);
-        eq.setParameters (100.0f, 6.0f, 500.0f, -4.0f, 1.0f, 3000.0f, 5.0f, 0.8f, 10000.0f, 4.0f);
+        eq.setParameters (100.0f, 6.0f, 500.0f, -4.0f, 1.0f, 3000.0f, 5.0f, 0.8f, 10000.0f, 4.0f, false);
         juce::AudioBuffer<float> buf (2, block);
         fillSine (buf, 100.0, sr, 0.3, 0);
         const float dryPeak = buf.getMagnitude (0, 0, block);

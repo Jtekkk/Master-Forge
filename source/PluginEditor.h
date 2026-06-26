@@ -156,6 +156,7 @@ private:
 
     juce::OwnedArray<juce::TextButton> modeButtons;   // Stereo / Mid / Side
     juce::TextButton freezeButton { "FREEZE" };
+    juce::TextButton linearButton { "LIN" };          // linear-phase EQ
 
     int  draggingBand = -1;
     int  hoverBand    = -1;
@@ -214,7 +215,8 @@ private:
     mf::ForgeLookAndFeel lookAndFeel;
 
     juce::ToggleButton bypassButton { "BYPASS" };
-    std::unique_ptr<mf::ButtonAttachment> bypassAttachment;
+    juce::ToggleButton hqButton { "HQ 16X" };
+    std::unique_ptr<mf::ButtonAttachment> bypassAttachment, hqAttachment;
 
     mf::PresetBar      presetBar;
     mf::EQDisplay      eqDisplay;

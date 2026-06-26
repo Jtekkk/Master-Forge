@@ -29,8 +29,7 @@ void MasterForgeAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     currentSampleRate = sampleRate;
     const int numCh = juce::jmax (1, getTotalNumOutputChannels());
 
-    juce::dsp::ProcessSpec spec;
-    spec.sampleRate      = sampleRate;
+    spec.sampleRate       = sampleRate;
     spec.maximumBlockSize = (juce::uint32) juce::jmax (1, samplesPerBlock);
     spec.numChannels      = (juce::uint32) numCh;
 
@@ -41,41 +40,51 @@ void MasterForgeAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 
     eq.prepare (spec);
     multiband.prepare (spec);
-    saturation.prepare (spec);
     stereoWidth.prepare (spec);
     limiter.prepare (spec);
     meter.prepare (sampleRate, numCh);
     analyzer.prepare (sampleRate);
 
-    // True-peak / oversampled limiter path (4x).
-    // Linear-phase FIR oversampling for clean inter-sample-peak (true-peak) control.
+    lastTruePeak = truePeakParam->get();
+    lastLinear   = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
+    prepareQuality (apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f);
+}
+
+void MasterForgeAudioProcessor::prepareQuality (bool hq)
+{
+    const int stages = hq ? 4 : 2; // 16x (HQ) or 4x
+
+    saturation.prepare (spec, stages);
+
     oversampler = std::make_unique<juce::dsp::Oversampling<float>> (
-        (size_t) numCh, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        (size_t) spec.numChannels, (size_t) stages,
+        juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
     oversampler->initProcessing ((size_t) spec.maximumBlockSize);
     oversampler->reset();
     osFactor = (int) oversampler->getOversamplingFactor();
 
     juce::dsp::ProcessSpec osSpec;
-    osSpec.sampleRate      = sampleRate * osFactor;
+    osSpec.sampleRate       = spec.sampleRate * osFactor;
     osSpec.maximumBlockSize = spec.maximumBlockSize * (juce::uint32) osFactor;
-    osSpec.numChannels      = (juce::uint32) numCh;
+    osSpec.numChannels      = spec.numChannels;
     limiterOS.prepare (osSpec);
 
+    lastHq = hq;
     updateParameters();
-
-    lastTruePeak = truePeakParam->get();
-    setLatencySamples (computeLatencySamples (lastTruePeak));
+    setLatencySamples (computeLatencySamples (truePeakParam->get()));
 }
 
 int MasterForgeAudioProcessor::computeLatencySamples (bool truePeak)
 {
-    const int satLatency = saturation.getLatencySamples();
+    int lat = saturation.getLatencySamples() + eq.getLatencySamples();
 
     if (truePeak && oversampler != nullptr)
-        return satLatency + (int) std::round (oversampler->getLatencyInSamples())
+        lat += (int) std::round (oversampler->getLatencyInSamples())
              + limiterOS.getLatencySamples() / juce::jmax (1, osFactor);
+    else
+        lat += limiter.getLatencySamples();
 
-    return satLatency + limiter.getLatencySamples();
+    return lat;
 }
 
 void MasterForgeAudioProcessor::updateParameters()
@@ -91,7 +100,8 @@ void MasterForgeAudioProcessor::updateParameters()
     eq.setParameters (val (pid::eqLowFreq),  val (pid::eqLowGain),
                       val (pid::eqLmFreq),   val (pid::eqLmGain),  val (pid::eqLmQ),
                       val (pid::eqHmFreq),   val (pid::eqHmGain),  val (pid::eqHmQ),
-                      val (pid::eqHighFreq), val (pid::eqHighGain));
+                      val (pid::eqHighFreq), val (pid::eqHighGain),
+                      val (pid::eqLinear) > 0.5f);
 
     multiband.setParameters (val (pid::mbXLow), val (pid::mbXHigh),
                              val (pid::compAttack), val (pid::compRelease), val (pid::compKnee),
@@ -99,7 +109,7 @@ void MasterForgeAudioProcessor::updateParameters()
                              val (pid::mbMidThresh), val (pid::mbMidRatio), val (pid::mbMidMakeup),
                              val (pid::mbHiThresh),  val (pid::mbHiRatio),  val (pid::mbHiMakeup));
 
-    saturation.setParameters (val (pid::satDrive), val (pid::satMix));
+    saturation.setThd (val (pid::thd));
     stereoWidth.setWidth (val (pid::width));
 
     const float ceiling = val (pid::limCeiling);
@@ -117,6 +127,19 @@ void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (ch, 0, buffer.getNumSamples());
 
     updateParameters();
+
+    // Quality-mode changes: re-prepare the oversampled stages when HQ toggles,
+    // and refresh reported latency when HQ / linear-phase changes.
+    const bool hq = apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f;
+    if (hq != lastHq)
+        prepareQuality (hq);
+
+    const bool linear = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
+    if (linear != lastLinear)
+    {
+        lastLinear = linear;
+        setLatencySamples (computeLatencySamples (truePeakParam->get()));
+    }
 
     if (bypassParam->get())
     {

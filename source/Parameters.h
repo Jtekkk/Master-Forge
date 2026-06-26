@@ -14,6 +14,10 @@ namespace mf::pid
     inline constexpr auto inputGain   = "inputGain";
     inline constexpr auto outputGain  = "outputGain";
 
+    // --- global quality -----------------------------------------------------
+    inline constexpr auto hqMode      = "hqMode";      // 16x oversampling when on
+    inline constexpr auto eqLinear    = "eqLinear";    // linear-phase EQ when on
+
     // --- 4-band mastering EQ -----------------------------------------------
     inline constexpr auto eqMode      = "eqMode";      // 0=Stereo, 1=Mid, 2=Side
     inline constexpr auto eqLowFreq   = "eqLowFreq";   // low shelf
@@ -43,9 +47,8 @@ namespace mf::pid
     inline constexpr auto mbHiRatio   = "mbHiRatio";
     inline constexpr auto mbHiMakeup  = "mbHiMakeup";
 
-    // --- saturation ---------------------------------------------------------
-    inline constexpr auto satDrive    = "satDrive";
-    inline constexpr auto satMix      = "satMix";
+    // --- saturation / harmonics --------------------------------------------
+    inline constexpr auto thd         = "thd";         // THD amount (harmonics)
 
     // --- stereo width -------------------------------------------------------
     inline constexpr auto width       = "width";
@@ -84,6 +87,7 @@ namespace mf
 
         // ---- global ----
         params.push_back (std::make_unique<BoolParam>  (vid (p::bypass), "Bypass", false));
+        params.push_back (std::make_unique<BoolParam>  (vid (p::hqMode), "HQ", false));
         params.push_back (std::make_unique<FloatParam> (vid (p::inputGain),  "Input",
             juce::NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f, db ("dB")));
         params.push_back (std::make_unique<FloatParam> (vid (p::outputGain), "Output",
@@ -92,6 +96,7 @@ namespace mf
         // ---- EQ ----
         params.push_back (std::make_unique<juce::AudioParameterChoice> (vid (p::eqMode), "EQ Mode",
             juce::StringArray { "Stereo", "Mid", "Side" }, 0));
+        params.push_back (std::make_unique<BoolParam> (vid (p::eqLinear), "Linear Phase", false));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLowFreq), "Low Freq",
             freqRange (20.0f, 500.0f, 120.0f), 100.0f, db ("Hz")));
         params.push_back (std::make_unique<FloatParam> (vid (p::eqLowGain), "Low Gain", gainRange(), 0.0f, db ("dB")));
@@ -135,10 +140,8 @@ namespace mf
         params.push_back (std::make_unique<FloatParam> (vid (p::mbHiRatio),  "High Ratio", ratioRange(), 1.0f, Attr().withLabel (":1")));
         params.push_back (std::make_unique<FloatParam> (vid (p::mbHiMakeup), "High Gain",  makeupRange(), 0.0f, db ("dB")));
 
-        // ---- saturation ----
-        params.push_back (std::make_unique<FloatParam> (vid (p::satDrive), "Drive",
-            juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f), 6.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::satMix), "Sat Mix",
+        // ---- saturation / harmonics ----
+        params.push_back (std::make_unique<FloatParam> (vid (p::thd), "THD",
             juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f, db ("%")));
 
         // ---- width ----

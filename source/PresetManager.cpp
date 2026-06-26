@@ -35,7 +35,7 @@ const std::vector<PresetManager::FactoryPreset>& PresetManager::factoryPresets()
             { pid::mbMidThresh, -24.0f }, { pid::mbMidRatio, 3.5f }, { pid::mbMidMakeup, 3.0f },
             { pid::mbHiThresh,  -22.0f }, { pid::mbHiRatio,  3.0f }, { pid::mbHiMakeup,  2.0f },
             { pid::compAttack, 5.0f }, { pid::compRelease, 120.0f },
-            { pid::satDrive, 8.0f }, { pid::satMix, 25.0f },
+            { pid::thd, 25.0f },
             { pid::outputGain, 6.0f }, { pid::limCeiling, -0.3f } } },
 
         { "Gentle Glue", {
@@ -51,7 +51,7 @@ const std::vector<PresetManager::FactoryPreset>& PresetManager::factoryPresets()
             { pid::mbLowThresh, -20.0f }, { pid::mbLowRatio, 2.5f },
             { pid::mbMidThresh, -18.0f }, { pid::mbMidRatio, 2.0f },
             { pid::mbHiThresh,  -16.0f }, { pid::mbHiRatio,  1.8f },
-            { pid::satDrive, 12.0f }, { pid::satMix, 45.0f },
+            { pid::thd, 45.0f },
             { pid::width, 110.0f }, { pid::outputGain, 4.0f }, { pid::limCeiling, -0.5f } } },
 
         { "Bright & Wide", {
@@ -66,7 +66,7 @@ const std::vector<PresetManager::FactoryPreset>& PresetManager::factoryPresets()
             { pid::mbMidThresh, -20.0f }, { pid::mbMidRatio, 2.5f }, { pid::mbMidMakeup, 1.5f },
             { pid::mbHiThresh,  -20.0f }, { pid::mbHiRatio,  2.5f }, { pid::mbHiMakeup,  1.5f },
             { pid::compAttack, 10.0f }, { pid::compRelease, 150.0f },
-            { pid::satMix, 15.0f }, { pid::outputGain, 5.0f },
+            { pid::thd, 15.0f }, { pid::outputGain, 5.0f },
             { pid::limCeiling, -1.0f }, { pid::limTruePeak, 1.0f } } },
     };
     return presets;

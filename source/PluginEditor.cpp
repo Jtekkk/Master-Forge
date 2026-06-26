@@ -404,6 +404,10 @@ mf::EQDisplay::EQDisplay (MasterForgeAudioProcessor& proc, juce::AudioProcessorV
     freezeButton.onClick = [this] { frozen = freezeButton.getToggleState(); };
     addAndMakeVisible (freezeButton);
 
+    linearButton.setClickingTogglesState (true);
+    linearButton.onClick = [this] { setVal (pid::eqLinear, linearButton.getToggleState() ? 1.0f : 0.0f); };
+    addAndMakeVisible (linearButton);
+
     syncModeButtons();
 }
 
@@ -420,6 +424,7 @@ void mf::EQDisplay::syncModeButtons()
     const int mode = (int) getVal (pid::eqMode);
     for (int i = 0; i < modeButtons.size(); ++i)
         modeButtons[i]->setToggleState (i == mode, juce::dontSendNotification);
+    linearButton.setToggleState (getVal (pid::eqLinear) > 0.5f, juce::dontSendNotification);
 }
 
 juce::Rectangle<float> mf::EQDisplay::plot() const
@@ -494,6 +499,8 @@ void mf::EQDisplay::resized()
     for (int i = 0; i < modeButtons.size(); ++i)
         modeButtons[i]->setBounds (i == 2 ? modeArea : modeArea.removeFromLeft (mw));
     freezeButton.setBounds (strip.removeFromRight (62));
+    strip.removeFromRight (6);
+    linearButton.setBounds (strip.removeFromRight (46));
 }
 
 void mf::EQDisplay::paint (juce::Graphics& g)
@@ -834,6 +841,9 @@ MasterForgeAudioProcessorEditor::MasterForgeAudioProcessorEditor (MasterForgeAud
     addAndMakeVisible (bypassButton);
     bypassAttachment = std::make_unique<mf::ButtonAttachment> (state, pid::bypass, bypassButton);
 
+    addAndMakeVisible (hqButton);
+    hqAttachment = std::make_unique<mf::ButtonAttachment> (state, pid::hqMode, hqButton);
+
     addAndMakeVisible (presetBar);
     addAndMakeVisible (eqDisplay);
 
@@ -855,9 +865,8 @@ MasterForgeAudioProcessorEditor::MasterForgeAudioProcessorEditor (MasterForgeAud
     gainSection.addKnob (state, pid::outputGain, "OUTPUT");
     addAndMakeVisible (gainSection);
 
-    characterSection.addKnob (state, pid::satDrive, "DRIVE");
-    characterSection.addKnob (state, pid::satMix,   "SAT MIX");
-    characterSection.addKnob (state, pid::width,    "WIDTH");
+    characterSection.addKnob (state, pid::thd,   "THD");
+    characterSection.addKnob (state, pid::width, "WIDTH");
     addAndMakeVisible (characterSection);
 
     addAndMakeVisible (limiterPanel);
@@ -941,7 +950,8 @@ void MasterForgeAudioProcessorEditor::resized()
     auto area = getLocalBounds();
 
     auto header = area.removeFromTop (52);
-    bypassButton.setBounds (header.removeFromRight (124).reduced (16, 13));
+    bypassButton.setBounds (header.removeFromRight (116).reduced (12, 14));
+    hqButton.setBounds (header.removeFromRight (96).reduced (4, 14));
 
     presetBar.setBounds (area.removeFromTop (40).reduced (10, 2));
 

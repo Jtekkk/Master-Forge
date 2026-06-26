@@ -78,6 +78,7 @@ public:
 
 private:
     void updateParameters();
+    void prepareQuality (bool hq);            // (re)build oversampled stages for HQ on/off
     int  computeLatencySamples (bool truePeak);
 
     juce::AudioProcessorValueTreeState apvts {
@@ -98,8 +99,11 @@ private:
     mf::SpectrumAnalyzer     analyzer;
 
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;
+    juce::dsp::ProcessSpec spec {};
     int  osFactor = 1;
     bool lastTruePeak = false;
+    bool lastHq = false;
+    bool lastLinear = false;
 
     juce::dsp::Gain<float> inputGain, outputGain;
 
