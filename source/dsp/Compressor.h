@@ -6,12 +6,14 @@
 namespace mf
 {
 /**
-    Stereo-linked, soft-knee compressor.
+    Stereo-linked, soft-knee compressor with an RMS (mean-square) detector.
 
-    Detection is peak based and linked across channels (the loudest channel
-    drives the gain) so the stereo image stays put. The static curve follows
-    the classic soft-knee formulation from Giannoulis, Massberg & Reiss,
-    "Digital Dynamic Range Compressor Design" (JAES 2012).
+    Detection is RMS rather than instantaneous peak: the squared input is
+    smoothed with the attack/release time constants before the level is taken.
+    This is what keeps the gain from following the waveform on low frequencies
+    (a peak detector there modulates the signal within each cycle and adds
+    audible harmonic distortion). The static curve is the classic soft-knee
+    formulation from Giannoulis, Massberg & Reiss (JAES 2012).
 */
 class Compressor
 {
@@ -19,10 +21,11 @@ public:
     void prepare (const juce::dsp::ProcessSpec& spec)
     {
         sampleRate = spec.sampleRate;
+        rmsCoeff = timeToCoeff (rmsMs);
         reset();
     }
 
-    void reset() { envelopeDb = 0.0f; }
+    void reset() { msEnv = 0.0f; grEnv = 0.0f; }
 
     void setParameters (float thresholdDb, float ratio_, float attackMs,
                         float releaseMs, float kneeDb, float makeupDb)
@@ -47,23 +50,28 @@ public:
 
         for (int i = 0; i < numSamples; ++i)
         {
-            // Linked detector: loudest sample across all channels.
-            float peak = 0.0f;
+            // Linked detector: loudest squared sample across channels.
+            float peakSq = 0.0f;
             for (int ch = 0; ch < numCh; ++ch)
-                peak = juce::jmax (peak, std::abs (data[ch][i]));
+                peakSq = juce::jmax (peakSq, data[ch][i] * data[ch][i]);
 
-            const float levelDb     = juce::Decibels::gainToDecibels (peak, -100.0f);
-            const float targetGainDb = levelDb - computeCurve (levelDb); // >= 0 reduction
+            // Stage 1: symmetric RMS pre-average. Smoothing the power here (rather
+            // than branching) keeps the level steady within a waveform cycle, so
+            // the gain doesn't modulate the signal (the source of bass distortion).
+            msEnv = rmsCoeff * msEnv + (1.0f - rmsCoeff) * peakSq;
 
-            // Branching attack/release on the gain-reduction envelope.
-            const float coeff = (targetGainDb > envelopeDb) ? attackCoeff : releaseCoeff;
-            envelopeDb = coeff * envelopeDb + (1.0f - coeff) * targetGainDb;
+            const float levelDb = 10.0f * std::log10 (juce::jmax (msEnv, 1.0e-10f));
+            const float targetReductionDb = levelDb - computeCurve (levelDb); // >= 0
 
-            const float gain = juce::Decibels::decibelsToGain (-envelopeDb) * makeupGain;
+            // Stage 2: attack/release envelope on the gain reduction.
+            const float coeff = (targetReductionDb > grEnv) ? attackCoeff : releaseCoeff;
+            grEnv = coeff * grEnv + (1.0f - coeff) * targetReductionDb;
+
+            const float gain = juce::Decibels::decibelsToGain (-grEnv) * makeupGain;
             for (int ch = 0; ch < numCh; ++ch)
                 data[ch][i] *= gain;
 
-            maxReductionDb = juce::jmax (maxReductionDb, envelopeDb);
+            maxReductionDb = juce::jmax (maxReductionDb, grEnv);
         }
 
         return maxReductionDb;
@@ -96,6 +104,9 @@ private:
     double sampleRate = 44100.0;
     float  threshold = -18.0f, ratio = 2.0f, knee = 6.0f, makeupGain = 1.0f;
     float  attackCoeff = 0.0f, releaseCoeff = 0.0f;
-    float  envelopeDb = 0.0f;
+    float  msEnv = 0.0f, grEnv = 0.0f;
+
+    static constexpr float rmsMs = 30.0f;  // RMS detector averaging window
+    float rmsCoeff = 0.0f;
 };
 } // namespace mf

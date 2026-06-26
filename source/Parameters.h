@@ -124,15 +124,15 @@ namespace mf
         params.push_back (std::make_unique<FloatParam> (vid (p::compKnee), "Knee", makeupRange(), 6.0f, db ("dB")));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::mbLowThresh), "Low Thr",  threshRange(), -18.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::mbLowRatio),  "Low Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbLowRatio),  "Low Ratio", ratioRange(), 1.0f, Attr().withLabel (":1")));
         params.push_back (std::make_unique<FloatParam> (vid (p::mbLowMakeup), "Low Gain",  makeupRange(), 0.0f, db ("dB")));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::mbMidThresh), "Mid Thr",  threshRange(), -18.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::mbMidRatio),  "Mid Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbMidRatio),  "Mid Ratio", ratioRange(), 1.0f, Attr().withLabel (":1")));
         params.push_back (std::make_unique<FloatParam> (vid (p::mbMidMakeup), "Mid Gain",  makeupRange(), 0.0f, db ("dB")));
 
         params.push_back (std::make_unique<FloatParam> (vid (p::mbHiThresh), "High Thr",  threshRange(), -18.0f, db ("dB")));
-        params.push_back (std::make_unique<FloatParam> (vid (p::mbHiRatio),  "High Ratio", ratioRange(), 2.0f, Attr().withLabel (":1")));
+        params.push_back (std::make_unique<FloatParam> (vid (p::mbHiRatio),  "High Ratio", ratioRange(), 1.0f, Attr().withLabel (":1")));
         params.push_back (std::make_unique<FloatParam> (vid (p::mbHiMakeup), "High Gain",  makeupRange(), 0.0f, db ("dB")));
 
         // ---- saturation ----

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(MasterForge VERSION 0.3.0 LANGUAGES C CXX)
+project(MasterForge VERSION 0.3.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -138,6 +138,25 @@ if(MASTERFORGE_BUILD_TESTS)
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
         JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0)
     target_link_libraries(MasterForgeIntegration PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+    # Offline audio analyzer (THD / frequency response).
+    juce_add_console_app(MasterForgeAnalyze PRODUCT_NAME "MasterForgeAnalyze")
+    juce_generate_juce_header(MasterForgeAnalyze)
+    target_sources(MasterForgeAnalyze PRIVATE
+        tools/analyze_audio.cpp
+        source/PluginProcessor.cpp
+        source/PluginEditor.cpp
+        source/PresetManager.cpp
+        source/gui/ForgeLookAndFeel.cpp)
+    target_include_directories(MasterForgeAnalyze PRIVATE source)
+    target_compile_definitions(MasterForgeAnalyze PUBLIC
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0 JUCE_REPORT_APP_USAGE=0)
+    target_link_libraries(MasterForgeAnalyze PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
