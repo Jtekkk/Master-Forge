@@ -149,6 +149,42 @@ void blockSizeTest (const juce::String& label, bool truePeak, bool compress)
               << (juce::jmax (d64, dvar) > 1.0e-4 ? "   <-- INCONSISTENT" : "   ok") << "\n";
 }
 
+// Energy of all non-fundamental in-band content, in dB below the fundamental.
+// For a high enough tone every harmonic folds, so this is the aliasing floor.
+double aliasingDb (const juce::String& name, double freq, double ampDb,
+                   const std::function<void (MasterForgeAudioProcessor&)>& setup)
+{
+    MasterForgeAudioProcessor p;
+    p.setPlayConfigDetails (2, 2, SR, BLK);
+    p.prepareToPlay (SR, BLK);
+    setup (p);
+
+    const int order = 16, N = 1 << order;
+    const double f0 = std::round (freq * N / SR) * SR / N;   // bin-aligned
+    const double amp = juce::Decibels::decibelsToGain (ampDb);
+    auto y = run (p, 1 << 17, 8192 + p.getLatencySamples(),
+                  [=] (long long n) { return (float) (amp * std::sin (2.0 * kPi * f0 * (double) n / SR)); });
+
+    juce::dsp::FFT fft (order);
+    juce::dsp::WindowingFunction<float> win ((size_t) N, juce::dsp::WindowingFunction<float>::hann);
+    std::vector<float> data (2 * (size_t) N, 0.0f);
+    for (int i = 0; i < N; ++i) data[(size_t) i] = y[y.size() - (size_t) N + (size_t) i];
+    win.multiplyWithWindowingTable (data.data(), (size_t) N);
+    fft.performFrequencyOnlyForwardTransform (data.data());
+
+    const int fundBin = (int) std::round (f0 * N / SR);
+    double fund = 0.0, other = 0.0;
+    for (int b = 2; b < N / 2; ++b)
+    {
+        const double e = (double) data[(size_t) b] * data[(size_t) b];
+        if (std::abs (b - fundBin) <= 4) fund += e;
+        else                             other += e;
+    }
+    const double dB = fund > 0.0 ? 10.0 * std::log10 (other / fund) : -200.0;
+    std::cout << "  " << name << " (" << (int) f0 << " Hz): aliasing = " << juce::String (dB, 1) << " dB\n";
+    return dB;
+}
+
 void thdScenario (const juce::String& name, double freq, double ampDb,
                   const std::function<void (MasterForgeAudioProcessor&)>& setup)
 {
@@ -179,6 +215,11 @@ int main()
     thdScenario ("default 60Hz       ",   60.0, -12.0f, [] (auto&) {});
     thdScenario ("default 60Hz (R=4) ",   60.0, -12.0f, [] (auto& p) { setP (p, mf::pid::mbLowRatio, 4.0f); });
     thdScenario ("default 90Hz       ",   90.0, -10.0f, [] (auto&) {});
+
+    std::cout << "\n[Aliasing — nonlinear stages, high tone (lower dB = cleaner)]\n";
+    aliasingDb ("clean (sat off)  ", 14000.0, -6.0f, [] (auto&) {});
+    aliasingDb ("saturation 12/100", 14000.0, -6.0f, [] (auto& p) { setP (p, mf::pid::satDrive, 12.0f); setP (p, mf::pid::satMix, 100.0f); });
+    aliasingDb ("hot into limiter ", 14000.0,  3.0f, [] (auto& p) { setP (p, mf::pid::limCeiling, -6.0f); });
 
     std::cout << "\n[Block-size consistency — output must not depend on buffering]\n";
     blockSizeTest ("default,         TP on ", true,  false);

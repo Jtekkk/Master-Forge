@@ -69,11 +69,13 @@ void MasterForgeAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 
 int MasterForgeAudioProcessor::computeLatencySamples (bool truePeak)
 {
+    const int satLatency = saturation.getLatencySamples();
+
     if (truePeak && oversampler != nullptr)
-        return (int) std::round (oversampler->getLatencyInSamples())
+        return satLatency + (int) std::round (oversampler->getLatencyInSamples())
              + limiterOS.getLatencySamples() / juce::jmax (1, osFactor);
 
-    return limiter.getLatencySamples();
+    return satLatency + limiter.getLatencySamples();
 }
 
 void MasterForgeAudioProcessor::updateParameters()
