@@ -35,8 +35,11 @@ jobs:
             echo "version=${{ github.event.inputs.version || '0.3.0' }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # No -G: let CMake pick whichever Visual Studio the runner image ships.
+      # Pinning "Visual Studio 17 2022" broke the moment windows-latest moved to
+      # a newer Visual Studio ("could not find any instance of Visual Studio").
       - name: Configure (CMake fetches JUCE)
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DMASTERFORGE_COPY_AFTER_BUILD=OFF
+        run: cmake -B build -A x64 -DMASTERFORGE_COPY_AFTER_BUILD=OFF
 
       - name: Build VST3 (Release x64)
         run: cmake --build build --config Release --target MasterForge_VST3 --parallel

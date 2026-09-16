@@ -3,7 +3,10 @@
 
 namespace mf
 {
-namespace pid = mf::pid;
+// No `namespace pid = mf::pid;` here: this file's contents already live in
+// namespace mf, so plain `pid::` resolves to mf::pid. Writing the alias at
+// this scope re-declares the name `pid` on top of the existing namespace,
+// which MSVC rejects outright (C2386) even though gcc/clang let it pass.
 
 PresetManager::PresetManager (juce::AudioProcessorValueTreeState& state)
     : apvts (state)
