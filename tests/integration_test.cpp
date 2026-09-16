@@ -115,6 +115,87 @@ int main()
     check (std::abs (apvts.getRawParameterValue (mf::pid::eqHighGain)->load() - 4.2f) < 0.05f,
            "state round-trips a parameter value");
 
+    // --- bypass: delay-matched and click-free -----------------------------
+    // The host compensates for the latency we report, so a bypassed plugin has
+    // to hand back the input delayed by exactly that much. Returning the input
+    // untouched would jump the audio forward by the whole chain latency the
+    // moment bypass is hit - a click, and a timing shift against every other
+    // track in the session.
+    std::cout << "[bypass]\n";
+    {
+        MasterForgeAudioProcessor q;
+        q.setPlayConfigDetails (2, 2, sr, block);
+        q.prepareToPlay (sr, block);
+
+        auto& qp = q.getAPVTS();
+        if (auto* bp = qp.getParameter (mf::pid::bypass))
+            bp->setValueNotifyingHost (1.0f);
+
+        const int lat = q.getLatencySamples();
+
+        std::vector<float> dry, wet;
+        juce::MidiBuffer m;
+        long long nn = 0;
+        for (int b = 0; b < 40; ++b)
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            for (int i = 0; i < block; ++i)
+            {
+                const double t = (double) (nn + i) / sr;
+                const float v = (float) (0.4 * std::sin (2.0 * kPi * 197.0 * t)
+                                       + 0.2 * std::sin (2.0 * kPi * 3100.0 * t));
+                buf.setSample (0, i, v); buf.setSample (1, i, v);
+                dry.push_back (v);
+            }
+            nn += block;
+            q.processBlock (buf, m);
+            for (int i = 0; i < block; ++i)
+                wet.push_back (buf.getSample (0, i));
+        }
+
+        float worst = 0.0f;
+        const int settle = 8 * block;    // past the bypass crossfade
+        for (int i = settle; i < (int) wet.size(); ++i)
+            worst = juce::jmax (worst, std::abs (wet[(size_t) i] - dry[(size_t) (i - lat)]));
+
+        check (lat > 0, "reports a non-zero chain latency (" + std::to_string (lat) + ")");
+        check (worst < 1.0e-5f,
+               "bypassed output is the input delayed by the reported latency (max diff "
+                   + juce::String (worst, 7).toStdString() + ")");
+
+        // Toggling bypass mid-stream must not step the signal.
+        float worstJump = 0.0f, prev = wet.back();
+        for (int b = 0; b < 30; ++b)
+        {
+            if (b == 5)
+                if (auto* bp = qp.getParameter (mf::pid::bypass))
+                    bp->setValueNotifyingHost (0.0f);   // back to processed
+
+            juce::AudioBuffer<float> buf (2, block);
+            for (int i = 0; i < block; ++i)
+            {
+                const double t = (double) (nn + i) / sr;
+                const float v = (float) (0.4 * std::sin (2.0 * kPi * 197.0 * t)
+                                       + 0.2 * std::sin (2.0 * kPi * 3100.0 * t));
+                buf.setSample (0, i, v); buf.setSample (1, i, v);
+            }
+            nn += block;
+            q.processBlock (buf, m);
+
+            for (int i = 0; i < block; ++i)
+            {
+                const float v = buf.getSample (0, i);
+                worstJump = juce::jmax (worstJump, std::abs (v - prev));
+                prev = v;
+            }
+        }
+        // A 3.1 kHz component moves ~0.08 per sample on its own; a discontinuity
+        // from an uncompensated bypass switch is several times the signal level.
+        check (worstJump < 0.25f,
+               "switching bypass does not step the waveform (max sample-to-sample jump "
+                   + juce::String (worstJump, 4).toStdString() + ")");
+    }
+
     // --- block-size independence (regression): the output must not depend on
     //     the host buffer size. A scratch-buffer length bug here once made the
     //     multiband run over stale tail samples at any size != the prepared max,

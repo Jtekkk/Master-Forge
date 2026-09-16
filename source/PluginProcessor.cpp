@@ -41,56 +41,79 @@ void MasterForgeAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
     eq.prepare (spec);
     multiband.prepare (spec);
     stereoWidth.prepare (spec);
-    limiter.prepare (spec);
     meter.prepare (sampleRate, numCh);
     analyzer.prepare (sampleRate);
+
+    // Both quality paths, ready to switch between without allocating later.
+    // The limiter oversamples its *detector* only - the audio path stays at the
+    // base rate, so true-peak mode costs no extra filtering of the signal.
+    saturationStd.prepare (spec, 2);   // 4x
+    saturationHq .prepare (spec, 4);   // 16x
+    limiterStd   .prepare (spec, 2);
+    limiterHq    .prepare (spec, 4);
 
     // Boundary scratch for the float <-> double conversion and the float meters.
     const int scratchCh = juce::jmax (numCh, getTotalNumInputChannels());
     const int maxBlock  = juce::jmax (1, samplesPerBlock);
     doubleScratch.setSize (scratchCh, maxBlock);
     meterScratch.setSize  (scratchCh, maxBlock);
+    dryScratch.setSize    (scratchCh, maxBlock);
 
-    lastTruePeak = truePeakParam->get();
-    lastLinear   = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
-    prepareQuality (apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f);
+    bypassMix.reset (sampleRate, 0.02);
+    bypassMix.setCurrentAndTargetValue (bypassParam->get() ? (Real) 1 : (Real) 0);
+
+    // The dry-bypass delay has to cover the longest latency the chain can
+    // report, whichever quality path and EQ mode are selected.
+    const int maxLatency = juce::jmax (saturationStd.getLatencySamples(),
+                                       saturationHq.getLatencySamples())
+                         + mf::ParametricEQT<Real>::getMaxLatencySamples()
+                         + juce::jmax (limiterStd.getLatencySamples(),
+                                       limiterHq.getLatencySamples());
+    dryDelay.setSize (numCh, maxLatency + maxBlock + 4);
+    dryDelay.clear();
+    dryWritePos = 0;
+
+    lastLinear = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
+
+    reportedLatency = -1;
+    selectQuality (apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f);
+    updateParameters();
 }
 
-void MasterForgeAudioProcessor::prepareQuality (bool hq)
+void MasterForgeAudioProcessor::selectQuality (bool hq)
 {
-    const int stages = hq ? 4 : 2; // 16x (HQ) or 4x
+    auto* nextSat = hq ? &saturationHq : &saturationStd;
+    auto* nextLim = hq ? &limiterHq    : &limiterStd;
 
-    saturation.prepare (spec, stages);
-
-    oversampler = std::make_unique<juce::dsp::Oversampling<Real>> (
-        (size_t) spec.numChannels, (size_t) stages,
-        juce::dsp::Oversampling<Real>::filterHalfBandFIREquiripple, true, true);
-    oversampler->initProcessing ((size_t) spec.maximumBlockSize);
-    oversampler->reset();
-    osFactor = (int) oversampler->getOversamplingFactor();
-
-    juce::dsp::ProcessSpec osSpec;
-    osSpec.sampleRate       = spec.sampleRate * osFactor;
-    osSpec.maximumBlockSize = spec.maximumBlockSize * (juce::uint32) osFactor;
-    osSpec.numChannels      = spec.numChannels;
-    limiterOS.prepare (osSpec);
+    if (nextSat != saturation || nextLim != limiter)
+    {
+        // The path we are leaving has been sitting idle, so start the new one
+        // from a clean state rather than from stale history.
+        nextSat->reset();
+        nextLim->reset();
+        saturation = nextSat;
+        limiter    = nextLim;
+    }
 
     lastHq = hq;
-    updateParameters();
-    setLatencySamples (computeLatencySamples (truePeakParam->get()));
+    refreshLatency();
 }
 
-int MasterForgeAudioProcessor::computeLatencySamples (bool truePeak)
+int MasterForgeAudioProcessor::computeLatencySamples() const
 {
-    int lat = saturation.getLatencySamples() + eq.getLatencySamples();
+    return saturation->getLatencySamples()
+         + eq.getLatencySamples()
+         + limiter->getLatencySamples();
+}
 
-    if (truePeak && oversampler != nullptr)
-        lat += (int) std::round (oversampler->getLatencyInSamples())
-             + limiterOS.getLatencySamples() / juce::jmax (1, osFactor);
-    else
-        lat += limiter.getLatencySamples();
+void MasterForgeAudioProcessor::refreshLatency()
+{
+    const int latency = computeLatencySamples();
+    if (latency == reportedLatency)
+        return;
 
-    return lat;
+    reportedLatency = latency;
+    setLatencySamples (latency);
 }
 
 void MasterForgeAudioProcessor::updateParameters()
@@ -115,13 +138,20 @@ void MasterForgeAudioProcessor::updateParameters()
                              val (pid::mbMidThresh), val (pid::mbMidRatio), val (pid::mbMidMakeup),
                              val (pid::mbHiThresh),  val (pid::mbHiRatio),  val (pid::mbHiMakeup));
 
-    saturation.setThd (val (pid::thd));
+    // Both quality paths are kept in sync so a switch is seamless.
+    const float thdAmount = val (pid::thd);
+    saturationStd.setThd (thdAmount);
+    saturationHq .setThd (thdAmount);
+
     stereoWidth.setWidth (val (pid::width));
 
     const float ceiling = val (pid::limCeiling);
     const float release = val (pid::limRelease);
-    limiter.setParameters (ceiling, release);
-    limiterOS.setParameters (ceiling, release);
+    const bool  tp      = truePeakParam->get();
+    limiterStd.setParameters (ceiling, release);
+    limiterHq .setParameters (ceiling, release);
+    limiterStd.setTruePeak (tp);
+    limiterHq .setTruePeak (tp);
 }
 
 void MasterForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
@@ -189,28 +219,54 @@ void MasterForgeAudioProcessor::processChain (juce::AudioBuffer<Real>& buffer)
 {
     updateParameters();
 
-    // Quality-mode changes: re-prepare the oversampled stages when HQ toggles,
-    // and refresh reported latency when HQ / linear-phase changes.
+    const int numCh = buffer.getNumChannels();
+    const int n     = buffer.getNumSamples();
+
     const bool hq = apvts.getRawParameterValue (pid::hqMode)->load() > 0.5f;
     if (hq != lastHq)
-        prepareQuality (hq);
+        selectQuality (hq);
 
     const bool linear = apvts.getRawParameterValue (pid::eqLinear)->load() > 0.5f;
     if (linear != lastLinear)
     {
         lastLinear = linear;
-        setLatencySamples (computeLatencySamples (truePeakParam->get()));
+        refreshLatency();
     }
 
-    if (bypassParam->get())
+    // --- dry path: the input, delayed by exactly the latency we report -------
+    const int delaySize = dryDelay.getNumSamples();
+    const int dryTaps   = juce::jlimit (0, juce::jmax (0, delaySize - 1), reportedLatency);
+    const int dryCh     = juce::jmin (numCh, dryDelay.getNumChannels());
+
+    juce::AudioBuffer<Real> dry (dryScratch.getArrayOfWritePointers(), numCh, n);
+    for (int ch = 0; ch < numCh; ++ch)
     {
-        compLowDb.store (0.0f);
-        compMidDb.store (0.0f);
-        compHiDb.store  (0.0f);
-        limReductionDb.store (0.0f);
-        return;                               // signal passes through untouched
-    }
+        const auto* src = buffer.getReadPointer (ch);
+        auto* out       = dry.getWritePointer (ch);
 
+        if (ch < dryCh && delaySize > 0)
+        {
+            auto* line = dryDelay.getWritePointer (ch);
+            int w = dryWritePos;
+            for (int i = 0; i < n; ++i)
+            {
+                int r = w - dryTaps;
+                if (r < 0) r += delaySize;
+                line[w] = src[i];
+                out[i]  = line[r];
+                if (++w >= delaySize) w = 0;
+            }
+        }
+        else
+        {
+            for (int i = 0; i < n; ++i)
+                out[i] = src[i];
+        }
+    }
+    if (delaySize > 0)
+        dryWritePos = (dryWritePos + n) % delaySize;
+
+    // --- wet path: always processed, so bypass is a clean A/B ---------------
     juce::dsp::AudioBlock<Real> block (buffer);
     juce::dsp::ProcessContextReplacing<Real> context (block);
 
@@ -218,46 +274,51 @@ void MasterForgeAudioProcessor::processChain (juce::AudioBuffer<Real>& buffer)
     eq.process (buffer, (int) apvts.getRawParameterValue (pid::eqMode)->load());
 
     multiband.process (buffer);
-    compLowDb.store (multiband.getReductionLow());
-    compMidDb.store (multiband.getReductionMid());
-    compHiDb.store  (multiband.getReductionHigh());
-
-    saturation.process (buffer);
+    saturation->process (buffer);
     stereoWidth.process (buffer);
     outputGain.process (context);
 
-    // --- limiter (with optional true-peak oversampling) ---
-    const bool truePeak = truePeakParam->get();
-    if (truePeak != lastTruePeak)
+    const float limGr = limiter->process (buffer);
+
+    // --- bypass crossfade ---------------------------------------------------
+    bypassMix.setTargetValue (bypassParam->get() ? (Real) 1 : (Real) 0);
+
+    const bool fullyBypassed = ! bypassMix.isSmoothing() && bypassMix.getCurrentValue() > (Real) 0.5;
+
+    if (bypassMix.isSmoothing() || bypassMix.getCurrentValue() > (Real) 0)
     {
-        setLatencySamples (computeLatencySamples (truePeak));
-        if (oversampler != nullptr)
-            oversampler->reset();
-        lastTruePeak = truePeak;
-    }
+        auto* const* wet    = buffer.getArrayOfWritePointers();
+        auto* const* dryPtr = dry.getArrayOfReadPointers();
 
-    float limGr = 0.0f;
-    if (truePeak && oversampler != nullptr)
-    {
-        juce::dsp::AudioBlock<Real> baseBlock (buffer);
-        auto osBlock = oversampler->processSamplesUp (baseBlock);
+        for (int i = 0; i < n; ++i)
+        {
+            // Raised cosine on the mix: no slope discontinuity at either end.
+            const Real m = bypassMix.getNextValue();
+            const Real s = (Real) 0.5 - (Real) 0.5 * std::cos (juce::MathConstants<Real>::pi * m);
 
-        const int osCh = (int) osBlock.getNumChannels();
-        const int osN  = (int) osBlock.getNumSamples();
-        Real* ptrs[8] = {};
-        for (int c = 0; c < osCh && c < 8; ++c)
-            ptrs[c] = osBlock.getChannelPointer ((size_t) c);
-
-        juce::AudioBuffer<Real> osBuffer (ptrs, osCh, osN);
-        limGr = limiterOS.process (osBuffer);
-
-        oversampler->processSamplesDown (baseBlock);
+            for (int ch = 0; ch < numCh; ++ch)
+                wet[ch][i] += s * (dryPtr[ch][i] - wet[ch][i]);
+        }
     }
     else
     {
-        limGr = limiter.process (buffer);
+        bypassMix.skip (n);
     }
-    limReductionDb.store (limGr);
+
+    if (fullyBypassed)
+    {
+        compLowDb.store (0.0f);
+        compMidDb.store (0.0f);
+        compHiDb.store  (0.0f);
+        limReductionDb.store (0.0f);
+    }
+    else
+    {
+        compLowDb.store (multiband.getReductionLow());
+        compMidDb.store (multiband.getReductionMid());
+        compHiDb.store  (multiband.getReductionHigh());
+        limReductionDb.store (limGr);
+    }
 }
 
 void MasterForgeAudioProcessor::publishMeters (const juce::AudioBuffer<float>& buffer)

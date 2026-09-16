@@ -17,12 +17,13 @@ input gain → 4-band EQ → 3-band multiband comp → saturation → stereo wid
 | Module | What it does |
 | --- | --- |
 | **Input / Output gain** | Trim level into the chain and drive into the limiter (±24 dB). |
-| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the colour-coded band handles (with a live freq/gain/Q readout); mouse-wheel a bell handle to change its Q. **Stereo / Mid / Side** mode, a **freeze** button, and a **Linear-phase** mode (FIR, phase-coherent, +512 samples latency). |
+| **4-band EQ + analyzer** | Low shelf, two parametric bells (freq/gain/Q) and a high shelf, drawn over a real-time FFT spectrum. Drag the colour-coded band handles (with a live freq/gain/Q readout); mouse-wheel a bell handle to change its Q. **Stereo / Mid / Side** mode, a **freeze** button, and a **Linear-phase** mode (2049-tap Kaiser-windowed FIR, phase-coherent, tracks the drawn curve to within **0.11 dB from 20 Hz to 20 kHz**, +1024 samples latency). In Mid/Side the untreated channel is delayed to match the FIR, so the image reconstructs exactly. Minimum-phase moves are de-zippered on a 32-sample grid. |
 | **3-band multiband compressor** | Linkwitz-Riley crossovers split the signal into low/mid/high bands, each with its own threshold, ratio and makeup (attack/release/knee are shared). Phase-compensated so the bands sum back flat. |
 | **THD / saturation** | A single **THD** knob adds tanh harmonic warmth (0% clean → 100% heavy). Oversampled so it stays clean — aliasing ~−62 dB at 4x, **~−110 dB with the HQ (16x) switch**. |
 | **64-bit precision** | The entire chain — EQ, crossovers, compressors, saturation, limiter — runs internally at **double precision (64-bit)** regardless of the host. A double-precision host is processed natively; a single-precision host is converted only at the in/out boundary. |
 | **Stereo width** | Mid/Side width from mono (0%) to wide (200%). |
-| **Brickwall limiter** | 5 ms lookahead, sliding-window peak detection and a ceiling-clamped safety net — the output never exceeds the ceiling. An optional **True Peak** mode limits on a 4× linear-phase oversampled signal to catch inter-sample peaks. Reports latency to the host. |
+| **Brickwall limiter** | 5 ms lookahead with sliding-window peak detection. The gain is smoothed by cascaded moving averages spanning exactly the lookahead window, which makes the ramp reach its target *at* the peak — so the gain never overshoots and the clamp never has to clip. **True Peak** mode oversamples the *detector* only: the audio path stays at the base rate, so there is no extra resampling, no reconstruction ripple and no latency change when you toggle it. Reports latency to the host. |
+| **Bypass** | Latency-compensated and click-free: the dry signal is delayed by exactly the latency the plugin reports and crossfaded against the wet path, so an A/B stays time-aligned with the rest of the session and the chain is still warm when you switch back. |
 | **Metering** | Momentary / short-term / gated-integrated **LUFS** (ITU-R BS.1770), output peak meters with peak-hold, per-band + limiter gain-reduction bars and a **stereo correlation** meter. |
 | **Presets** | Built-in factory presets, save/load of user presets to disk, and an **A/B** compare pair with copy-across. |
 
@@ -120,7 +121,10 @@ tools/
 
 ## Status
 
-Version 0.5.0 — quality pass: a single **THD** knob, an **HQ (16x)**
+Version 0.5.0 — quality pass: an overshoot-free limiter gain stage, a
+base-rate true-peak path, a measured-accurate linear-phase EQ kernel with
+correct Mid/Side alignment, latency-compensated bypass, a single **THD** knob,
+an **HQ (16x)**
 oversampling switch, a **linear-phase EQ** mode, an anti-aliased saturator, and
 **internal 64-bit double-precision processing** throughout the chain (native on
 double-precision hosts, boundary-converted on single-precision hosts).

@@ -11,7 +11,9 @@ namespace mf
     driven by a single THD amount (0..100%). It is oversampled (4x normally, 16x
     in HQ mode) with linear-phase FIR filters so the added harmonics don't alias,
     and the dry/wet blend is done in the oversampled domain so the two stay
-    phase-aligned.
+    phase-aligned. The oversampler is asked for integer latency, so the delay it
+    contributes is a whole number of samples and the host's delay compensation
+    lines the plugin up exactly rather than to the nearest sample.
 
     Templated on the sample type so the processor can run it at 64-bit double
     internally (float alias `Saturation` kept for the standalone DSP tests).
@@ -26,7 +28,9 @@ public:
         currentStages = juce::jmax (1, stages);
         oversampler = std::make_unique<juce::dsp::Oversampling<Sample>> (
             juce::jmax (1u, spec.numChannels), (size_t) currentStages,
-            juce::dsp::Oversampling<Sample>::filterHalfBandFIREquiripple, true, false);
+            juce::dsp::Oversampling<Sample>::filterHalfBandFIREquiripple,
+            true,   // maximum quality half-band FIRs
+            true);  // integer latency, so PDC is sample-exact
         oversampler->initProcessing (spec.maximumBlockSize);
         oversampler->reset();
         osFactor = (int) oversampler->getOversamplingFactor();
@@ -41,7 +45,7 @@ public:
 
     int getLatencySamples() const noexcept
     {
-        return oversampler != nullptr ? (int) std::round (oversampler->getLatencyInSamples()) : 0;
+        return oversampler != nullptr ? (int) std::lround (oversampler->getLatencyInSamples()) : 0;
     }
 
     /** @param thdPercent 0..100 — harmonic amount (0 = clean). */
