@@ -334,19 +334,35 @@ int main()
         thdScenario ("THD " + juce::String ((int) t) + "%   ", 1000.0, -12.0f,
                      [t] (auto& p) { setP (p, mf::pid::thd, t); });
 
-    std::cout << "\n[Linear-phase EQ — magnitude must match, with latency]\n";
+    std::cout << "\n[Linear-phase EQ — magnitude must match the minimum-phase curve]\n";
     {
-        MasterForgeAudioProcessor p;
-        p.setPlayConfigDetails (2, 2, SR, BLK);
-        p.prepareToPlay (SR, BLK);
-        setP (p, mf::pid::eqLinear, 1.0f);
-        setP (p, mf::pid::eqLowGain, 6.0f);   // +6 dB low shelf
-        setP (p, mf::pid::eqHighGain, -4.0f); // -4 dB high shelf
+        const auto build = [] (MasterForgeAudioProcessor& p, bool linear)
+        {
+            p.setPlayConfigDetails (2, 2, SR, BLK);
+            p.prepareToPlay (SR, BLK);
+            setP (p, mf::pid::eqLinear, linear ? 1.0f : 0.0f);
+            setP (p, mf::pid::eqLowGain, 6.0f);   // +6 dB low shelf
+            setP (p, mf::pid::eqHighGain, -4.0f); // -4 dB high shelf
+        };
+
+        MasterForgeAudioProcessor minPhase, linPhase;
+        build (minPhase, false);
+        build (linPhase,  true);
+
         const double amp = juce::Decibels::decibelsToGain (-18.0);
-        std::cout << "  latency = " << p.getLatencySamples() << " samples\n";
-        for (double f : { 50.0, 1000.0, 12000.0 })
-            std::cout << "  " << juce::String (f, 0).paddedLeft (' ', 6) << " Hz : "
-                      << juce::String (gainDbAt (p, f, amp), 2) << " dB\n";
+        double worst = 0.0;
+        for (double f : { 30.0, 50.0, 100.0, 300.0, 1000.0, 4000.0, 12000.0, 16000.0 })
+        {
+            const double a = gainDbAt (minPhase, f, amp);
+            const double b = gainDbAt (linPhase,  f, amp);
+            worst = std::max (worst, std::abs (a - b));
+            std::cout << "  " << juce::String (f, 0).paddedLeft (' ', 6) << " Hz : min-phase "
+                      << juce::String (a, 2).paddedLeft (' ', 6) << " dB   linear-phase "
+                      << juce::String (b, 2).paddedLeft (' ', 6) << " dB\n";
+        }
+        std::cout << "  --> worst deviation = " << juce::String (worst, 3) << " dB\n";
+        std::cout << "  latency: min-phase " << minPhase.getLatencySamples()
+                  << ", linear-phase " << linPhase.getLatencySamples() << " samples\n";
     }
 
     std::cout << "\n[Frequency response — default settings, should be flat]\n";

@@ -15,6 +15,7 @@
 #include <iostream>
 #include <string>
 #include <cmath>
+#include <vector>
 
 namespace
 {
@@ -268,22 +269,27 @@ int main()
     }
 
     // ---- True-peak limiter chain (oversample -> limit -> downsample) -----
-    std::cout << "[TruePeak limiter chain]\n";
+    // ---- True peak: the detector oversamples, the audio path does not -----
+    std::cout << "[TruePeak limiter]\n";
     {
         using OS = juce::dsp::Oversampling<float>;
-        OS os (2, 2, OS::filterHalfBandFIREquiripple, true, true);
-        os.initProcessing ((size_t) block);
-        os.reset();
-        const int osFactor = (int) os.getOversamplingFactor();
 
-        mf::Limiter limOS;
-        juce::dsp::ProcessSpec osSpec { sr * osFactor, (juce::uint32) (block * osFactor), 2 };
-        limOS.prepare (osSpec);
+        mf::Limiter lim;
+        lim.prepare (spec, 2);              // 4x detector
         const float ceilDb = -1.0f;
-        limOS.setParameters (ceilDb, 100.0f);
+        lim.setParameters (ceilDb, 100.0f);
+        lim.setTruePeak (true);
         const float ceilLin = juce::Decibels::decibelsToGain (ceilDb);
 
-        OS osMeas (2, 2, OS::filterHalfBandFIREquiripple, true, true);  // estimates output true peak
+        // Toggling true peak must not move the latency the host compensates.
+        const int latTrue = lim.getLatencySamples();
+        lim.setTruePeak (false);
+        const int latSample = lim.getLatencySamples();
+        lim.setTruePeak (true);
+        check (latTrue == latSample,
+               "latency is identical with true peak on and off (" + std::to_string (latTrue) + ")");
+
+        OS osMeas (2, 4, OS::filterHalfBandFIREquiripple, true, true);  // 16x reference
         osMeas.initProcessing ((size_t) block);
         osMeas.reset();
 
@@ -296,15 +302,7 @@ int main()
             fillSine (buf, 11000.0, sr, 1.4, n);   // hot, inter-sample-peak prone
             n += block;
 
-            juce::dsp::AudioBlock<float> base (buf);
-            auto up = os.processSamplesUp (base);
-            const int oc = (int) up.getNumChannels();
-            const int on = (int) up.getNumSamples();
-            float* ptrs[8] = {};
-            for (int c = 0; c < oc && c < 8; ++c) ptrs[c] = up.getChannelPointer ((size_t) c);
-            juce::AudioBuffer<float> osBuf (ptrs, oc, on);
-            limOS.process (osBuf);
-            os.processSamplesDown (base);
+            lim.process (buf);
             finite = finite && allFinite (buf);
 
             if (blk > 30)   // after the chains settle
@@ -318,9 +316,168 @@ int main()
             }
         }
         check (finite, "output is finite");
-        check (maxTruePeak <= ceilLin * 1.30f,
-               "estimated true peak " + juce::String (juce::Decibels::gainToDecibels (maxTruePeak), 2).toStdString()
-                   + " dB controlled near ceiling " + std::to_string (ceilDb) + " dB");
+        // 0.15 dB of headroom for the 4x detector's own estimation error.
+        check (maxTruePeak <= ceilLin * 1.0175f,
+               "measured true peak " + juce::String (juce::Decibels::gainToDecibels (maxTruePeak), 2).toStdString()
+                   + " dB holds the ceiling " + std::to_string (ceilDb) + " dB");
+    }
+
+    // ---- Limiter gain smoothing ------------------------------------------
+    // The output has to be the input times a smooth gain envelope: if the
+    // attack overshoots and the safety clamp has to catch it, the waveform is
+    // flat-topped and the gain recovered from out/in shows a sharp kink there.
+    std::cout << "[Limiter smoothing]\n";
+    {
+        mf::LimiterT<double> lim;
+        lim.prepare (spec);
+        const float ceilDb  = -1.0f;
+        const double ceilLin = juce::Decibels::decibelsToGain (ceilDb);
+        lim.setParameters (ceilDb, 100.0f);
+        const int lat = lim.getLatencySamples();
+
+        // Transient-heavy material: this is what makes a one-pole attack
+        // overshoot into the clamp.
+        std::vector<double> dryHist;
+        double maxOut = 0.0, maxGainStep = 0.0, prevGain = 1.0;
+        bool havePrev = false;
+        long long n = 0;
+        for (int blk = 0; blk < 400; ++blk)
+        {
+            juce::AudioBuffer<double> buf (2, block);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < block; ++i)
+                {
+                    const double t = (double) (n + i) / sr;
+                    const double env = (std::fmod (t, 0.05) < 0.004) ? 3.0 : 0.25;
+                    buf.setSample (ch, i, env * std::sin (2.0 * kPi * 320.0 * t));
+                }
+            for (int i = 0; i < block; ++i)
+                dryHist.push_back (buf.getSample (0, i));
+            const int base = (int) dryHist.size() - block;
+            n += block;
+
+            lim.process (buf);
+
+            for (int i = 0; i < block; ++i)
+            {
+                const double a = std::abs (buf.getSample (0, i));
+                if (blk >= 4)
+                    maxOut = juce::jmax (maxOut, a);
+
+                const int src = base + i - lat;
+                if (blk < 4 || src < 0) continue;
+
+                const double dry = dryHist[(size_t) src];
+                if (std::abs (dry) < 0.05) { havePrev = false; continue; }
+
+                const double gain = buf.getSample (0, i) / dry;
+                if (havePrev)
+                    maxGainStep = juce::jmax (maxGainStep, std::abs (gain - prevGain));
+                prevGain = gain;
+                havePrev = true;
+            }
+        }
+        check (maxOut <= ceilLin + 1.0e-9,
+               "transient peaks stay at or under the ceiling ("
+                   + juce::String (juce::Decibels::gainToDecibels (maxOut), 4).toStdString() + " dB)");
+        // The ramp spans the whole look-ahead window, so per-sample steps are tiny.
+        check (maxGainStep < 0.02,
+               "gain envelope is continuous - no clamping kink (max step "
+                   + juce::String (maxGainStep, 5).toStdString() + ")");
+    }
+
+    // ---- Linear-phase EQ: alignment and realised magnitude ---------------
+    std::cout << "[Linear-phase EQ]\n";
+    {
+        // A flat linear-phase EQ in Mid mode must give back the input delayed by
+        // the FIR latency on *both* channels. If the untreated channel skipped
+        // the delay, M and S would be 512 samples apart and the decoded stereo
+        // image would comb out.
+        mf::ParametricEQ lp;
+        lp.prepare (spec);
+        lp.setParameters (100.0f, 0.0f, 500.0f, 0.0f, 1.0f, 3000.0f, 0.0f, 0.8f, 10000.0f, 0.0f, true);
+        const int lat = lp.getLatencySamples();
+
+        std::vector<float> histL, histR;
+        float worstErr = 0.0f;
+        long long n = 0;
+        for (int blk = 0; blk < 12; ++blk)
+        {
+            juce::AudioBuffer<float> buf (2, block);
+            for (int i = 0; i < block; ++i)
+            {
+                const double t = (double) (n + i) / sr;
+                buf.setSample (0, i, (float) (0.4 * std::sin (2.0 * kPi * 700.0 * t)));
+                buf.setSample (1, i, (float) (0.25 * std::sin (2.0 * kPi * 1900.0 * t + 1.1)));
+            }
+            for (int i = 0; i < block; ++i) { histL.push_back (buf.getSample (0, i)); histR.push_back (buf.getSample (1, i)); }
+            n += block;
+
+            lp.process (buf, mf::ParametricEQ::mid);
+
+            const int base = (int) histL.size() - block;
+            for (int i = 0; i < block; ++i)
+            {
+                const int src = base + i - lat;
+                if (src < 2 * block) continue;      // let the FIR fill
+                worstErr = juce::jmax (worstErr, std::abs (buf.getSample (0, i) - histL[(size_t) src]));
+                worstErr = juce::jmax (worstErr, std::abs (buf.getSample (1, i) - histR[(size_t) src]));
+            }
+        }
+        check (worstErr < 1.0e-4f,
+               "flat linear-phase M/S is a pure delay on both channels (max error "
+                   + juce::String (worstErr, 7).toStdString() + ")");
+
+        // Realised response vs. the target curve across the band, measured from
+        // the FIR's own impulse response. This is what the window design and the
+        // DC/Nyquist handling in the kernel actually buy.
+        {
+            mf::ParametricEQ probeEq;
+            juce::dsp::ProcessSpec impSpec { sr, 8192, 2 };
+            probeEq.prepare (impSpec);
+            probeEq.setParameters (100.0f, 6.0f, 500.0f, -5.0f, 2.0f,
+                                   3000.0f, 9.0f, 4.0f, 10000.0f, -6.0f, true);
+
+            constexpr int irOrder = 13, irSize = 1 << irOrder;
+            juce::AudioBuffer<float> imp (2, irSize);
+            imp.clear();
+            imp.setSample (0, 0, 1.0f);
+            imp.setSample (1, 0, 1.0f);
+            probeEq.process (imp, mf::ParametricEQ::stereo);
+
+            juce::dsp::FFT irFft (irOrder);
+            std::vector<juce::dsp::Complex<float>> in ((size_t) irSize), out ((size_t) irSize);
+            for (int i = 0; i < irSize; ++i)
+                in[(size_t) i] = { imp.getSample (0, i), 0.0f };
+            irFft.perform (in.data(), out.data(), false);
+
+            using C = juce::dsp::IIR::Coefficients<float>;
+            const auto gg = [] (float dB) { return juce::Decibels::decibelsToGain (dB); };
+            auto rLow  = C::makeLowShelf   (sr, 100.0f,   0.707f, gg (6.0f));
+            auto rLm   = C::makePeakFilter (sr, 500.0f,   2.0f,   gg (-5.0f));
+            auto rHm   = C::makePeakFilter (sr, 3000.0f,  4.0f,   gg (9.0f));
+            auto rHigh = C::makeHighShelf  (sr, 10000.0f, 0.707f, gg (-6.0f));
+
+            double worstDb = 0.0, worstHz = 0.0;
+            for (int k = 1; k < irSize / 2; ++k)
+            {
+                const double f = (double) k * sr / (double) irSize;
+                if (f < 20.0 || f > 20000.0) continue;
+
+                const double target = rLow ->getMagnitudeForFrequency (f, sr)
+                                    * rLm  ->getMagnitudeForFrequency (f, sr)
+                                    * rHm  ->getMagnitudeForFrequency (f, sr)
+                                    * rHigh->getMagnitudeForFrequency (f, sr);
+                const double errDb = std::abs (juce::Decibels::gainToDecibels (std::abs (out[(size_t) k]))
+                                             - juce::Decibels::gainToDecibels (target));
+                if (errDb > worstDb) { worstDb = errDb; worstHz = f; }
+            }
+            check (worstDb < 0.15,
+                   "linear-phase FIR tracks the target curve within "
+                       + juce::String (worstDb, 3).toStdString() + " dB (worst at "
+                       + juce::String (worstHz, 0).toStdString() + " Hz)");
+        }
+
     }
 
     std::cout << "\n" << (failures == 0 ? "ALL CHECKS PASSED" : std::to_string (failures) + " CHECK(S) FAILED") << "\n";

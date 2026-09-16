@@ -20,11 +20,15 @@
 
     Signal flow:
         input gain -> 4-band EQ -> 3-band multiband compressor -> saturation ->
-        stereo width -> output gain -> brickwall limiter (optionally true-peak
-        / oversampled)
+        stereo width -> output gain -> brickwall limiter (optionally true-peak)
 
     The output gain sits before the limiter so it acts as the drive into the
     limiter, while the limiter ceiling stays the true final peak.
+
+    The whole chain keeps running while the plugin is bypassed: bypass is a
+    delay-matched crossfade to the dry signal rather than an early return, so
+    an A/B comparison is click-free, level-matched and time-aligned, and the
+    filters/compressors are already warm when the wet path comes back.
 */
 class MasterForgeAudioProcessor : public juce::AudioProcessor
 {
@@ -87,8 +91,9 @@ private:
     using Real = double;
 
     void updateParameters();
-    void prepareQuality (bool hq);            // (re)build oversampled stages for HQ on/off
-    int  computeLatencySamples (bool truePeak);
+    void selectQuality (bool hq);             // switch between the prepared quality paths
+    int  computeLatencySamples() const;
+    void refreshLatency();
     void processChain (juce::AudioBuffer<Real>& buffer); // the double-precision DSP chain
     void publishMeters (const juce::AudioBuffer<float>& output); // metering / analysis taps
 
@@ -102,19 +107,22 @@ private:
 
     mf::ParametricEQT<Real>          eq;
     mf::MultibandCompressorT<Real>   multiband;
-    mf::SaturationT<Real>            saturation;
     mf::StereoWidthT<Real>           stereoWidth;
-    mf::LimiterT<Real>               limiter;     // base-rate path
-    mf::LimiterT<Real>               limiterOS;   // oversampled (true-peak) path
     mf::LoudnessMeter                meter;       // metering stays single precision
     mf::SpectrumAnalyzer             analyzer;
 
-    std::unique_ptr<juce::dsp::Oversampling<Real>> oversampler;
+    // Both quality paths are built up front in prepareToPlay and simply
+    // selected by pointer, so toggling HQ takes effect on the very next block
+    // and never allocates on the audio thread.
+    mf::SaturationT<Real> saturationStd, saturationHq;   // 4x / 16x
+    mf::LimiterT<Real>    limiterStd,    limiterHq;      // 4x / 16x true-peak detector
+    mf::SaturationT<Real>* saturation = &saturationStd;
+    mf::LimiterT<Real>*    limiter    = &limiterStd;
+
     juce::dsp::ProcessSpec spec {};
-    int  osFactor = 1;
-    bool lastTruePeak = false;
     bool lastHq = false;
     bool lastLinear = false;
+    int  reportedLatency = 0;
 
     juce::dsp::Gain<Real> inputGain, outputGain;
 
@@ -122,6 +130,14 @@ private:
     // float copy of the output to feed the (single-precision) meters/analyzer.
     juce::AudioBuffer<Real>  doubleScratch;
     juce::AudioBuffer<float> meterScratch;
+
+    // Latency-compensated bypass: the dry signal is delayed by exactly the
+    // latency the chain reports and crossfaded against the wet path, so
+    // toggling bypass neither shifts the audio in time nor clicks.
+    juce::AudioBuffer<Real> dryDelay;
+    juce::AudioBuffer<Real> dryScratch;
+    int  dryWritePos = 0;
+    juce::SmoothedValue<Real> bypassMix { (Real) 0 };
 
     double currentSampleRate = 44100.0;
 
